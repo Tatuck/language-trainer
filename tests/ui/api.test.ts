@@ -284,3 +284,44 @@ describe("mock mode", () => {
     expect(await p2).not.toBe(opener);
   });
 });
+
+describe("historyFromTurns", () => {
+  let historyFromTurns: Api["historyFromTurns"];
+  beforeEach(async () => {
+    ({ historyFromTurns } = await import("@/lib/api"));
+  });
+
+  const analysis = {
+    transcript: "I'm 25 years old.",
+    unclear: false,
+    sentences: [],
+    pronunciation: [],
+    fluency: null,
+  };
+
+  it("maps completed turns to plain-text history, preferring the analysed transcript", () => {
+    const history = historyFromTurns([
+      { role: "bot", id: "b1", text: "Hi! How old are you?", streaming: false },
+      { role: "user", id: "u1", hint: "i have 25 years", analysis, error: null },
+      { role: "bot", id: "b2", text: "Oh, so you're 25.", streaming: false },
+      { role: "user", id: "u2", hint: "yes exactly", analysis: null, error: "Analysis failed" },
+    ]);
+    expect(history).toEqual([
+      { role: "assistant", content: "Hi! How old are you?" },
+      { role: "user", content: "I'm 25 years old." },
+      { role: "assistant", content: "Oh, so you're 25." },
+      { role: "user", content: "yes exactly" },
+    ]);
+  });
+
+  it("skips streaming or empty bot turns and user turns with nothing to say", () => {
+    const history = historyFromTurns([
+      { role: "bot", id: "b1", text: "", streaming: false },
+      { role: "bot", id: "b2", text: "partial", streaming: true },
+      { role: "user", id: "u1", hint: null, analysis: null, error: "Mic failed" },
+      { role: "user", id: "u2", hint: "   ", analysis: null, error: "Mic failed" },
+      { role: "user", id: "u3", hint: "still analysing", analysis: null, error: null },
+    ]);
+    expect(history).toEqual([]);
+  });
+});
