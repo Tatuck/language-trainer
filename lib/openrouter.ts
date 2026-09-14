@@ -12,6 +12,9 @@ export function resolveModels(): Models {
   return { chat, audio };
 }
 
+/** Per-request ceiling (ms): a 60 s audio clip plus model latency fits comfortably; hung upstreams do not. */
+export const REQUEST_TIMEOUT_MS = 60_000;
+
 /** OpenRouter speaks the OpenAI chat-completions protocol; the official SDK works with a base URL swap. */
 export function createClient(): OpenAI {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
@@ -21,6 +24,8 @@ export function createClient(): OpenAI {
   return new OpenAI({
     apiKey,
     baseURL: OPENROUTER_BASE_URL,
+    timeout: REQUEST_TIMEOUT_MS,
+    maxRetries: 1,
     defaultHeaders: { "X-Title": "LanguageTrainer" },
   });
 }
