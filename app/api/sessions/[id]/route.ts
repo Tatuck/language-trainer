@@ -3,7 +3,7 @@ import { deleteSession, getSession, putSession } from "@/lib/db";
 import { requestTooLarge } from "@/lib/llm/body-limit";
 import { SessionSchema } from "@/lib/session-normalise";
 import type { Session } from "@/lib/types";
-import { badRequest, noContent, notFound, serverError } from "../responses";
+import { badRequest, noContent, notFound, parseJsonBody, serverError } from "../../responses";
 
 type Context = RouteContext<"/api/sessions/[id]">;
 
@@ -24,14 +24,10 @@ export async function PUT(request: Request, ctx: Context): Promise<Response> {
   if (tooLarge) return tooLarge;
   const { id } = await ctx.params;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return badRequest("Request body must be valid JSON");
-  }
+  const parsedBody = await parseJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
 
-  const parsed = SessionSchema.safeParse(body);
+  const parsed = SessionSchema.safeParse(parsedBody.body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     if (!issue) return badRequest("Invalid session");

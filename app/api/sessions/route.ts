@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { listSessions, type SessionSummary } from "@/lib/db";
-import { serverError } from "./responses";
+import { serverError } from "../responses";
 
 /** Summaries of every session, newest first. */
 export async function GET(): Promise<Response> {

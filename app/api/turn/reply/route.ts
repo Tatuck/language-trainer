@@ -1,43 +1,28 @@
-import { NextResponse } from "next/server";
-import { createClient, resolveModels } from "@/lib/openrouter";
+import { resolveModels } from "@/lib/openrouter";
 import { tutorSystem } from "@/lib/prompts";
-import type { ApiError } from "@/lib/types";
 import { requestTooLarge } from "@/lib/llm/body-limit";
+import { createClientOrError } from "@/lib/llm/client";
 import { capHistory, pickUserMessage } from "@/lib/llm/reply-message";
 import { ReplyRequestSchema } from "@/lib/llm/requests";
 import { sseEvent } from "@/lib/llm/sse";
 import { isAbortError, upstreamErrorResponse } from "@/lib/llm/upstream-error";
-
-function badRequest(error: string): NextResponse<ApiError> {
-  return NextResponse.json({ error }, { status: 400 });
-}
+import { badRequest, parseJsonBody, validationError } from "../../responses";
 
 export async function POST(request: Request): Promise<Response> {
   const tooLarge = requestTooLarge(request);
   if (tooLarge) return tooLarge;
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return badRequest("Request body must be valid JSON");
-  }
+  const parsedBody = await parseJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
 
-  const parsed = ReplyRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return badRequest(parsed.error.issues[0]?.message ?? "Invalid request body");
-  }
+  const parsed = ReplyRequestSchema.safeParse(parsedBody.body);
+  if (!parsed.success) return validationError(parsed.error);
   const { audio, text, hint, topic, level } = parsed.data;
   const history = capHistory(parsed.data.history);
 
-  let client;
-  try {
-    client = createClient();
-  } catch (err) {
-    console.error("POST /api/turn/reply: cannot create OpenRouter client", err);
-    const message = err instanceof Error ? err.message : "Server misconfigured";
-    return NextResponse.json<ApiError>({ error: message }, { status: 500 });
-  }
+  const clientResult = createClientOrError("POST /api/turn/reply");
+  if (!clientResult.ok) return clientResult.response;
+  const client = clientResult.client;
 
   const models = resolveModels();
   const picked = pickUserMessage({
