@@ -1,0 +1,32 @@
+{
+  "transcript": "I have 25 years and I am agree with you. I like very much the food in my city. Yesterday I went to the cinema with my friends.",
+  "unclear": false,
+  "sentences": [
+    {
+      "text": "I have 25 years and I am agree with you.",
+      "verdict": "error",
+      "issue": "Calco del español: la edad se dice con 'to be' y 'agree' es un verbo, no un adjetivo.",
+      "correction": "I'm 25 years old and I agree with you.",
+      "alternatives": ["I'm 25, and I agree with you.", "I'm 25 and I'm with you on that."]
+    },
+    {
+      "text": "I like very much the food in my city.",
+      "verdict": "improve",
+      "issue": "Orden poco natural: 'very much' no va entre el verbo y el objeto.",
+      "correction": "I really like the food in my city.",
+      "alternatives": ["I love the food in my city.", "The food in my city is great."]
+    },
+    {
+      "text": "Yesterday I went to the cinema with my friends.",
+      "verdict": "good",
+      "issue": null,
+      "correction": null,
+      "alternatives": []
+    }
+  ],
+  "pronunciation": [
+    { "said": "years", "issue": "Sonó como 'jears'.", "tip": "La 'y' inicial es suave, como en 'yes', sin sonido de 'j'." },
+    { "said": "friends", "issue": "Sonó como 'frens', se perdió la 'd'.", "tip": "Marca la 'd' antes de la 's': 'frien-ds'." }
+  ],
+  "fluency": "Buen ritmo en general, con una pausa larga antes de 'cinema'."
+}
