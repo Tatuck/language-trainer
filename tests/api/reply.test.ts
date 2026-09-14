@@ -31,6 +31,33 @@ async function* erroringChunks() {
   throw new Error("network dropped");
 }
 
+async function* abortingChunks() {
+  yield { choices: [{ delta: { content: "Hi" } }] };
+  throw new DOMException("The operation was aborted", "AbortError");
+}
+
+/** Mimics the SDK's Stream: async-iterable with a `controller` whose abort() ends the iteration. */
+function mockStream(contents: string[]) {
+  const abort = vi.fn();
+  let cancelled = false;
+  const stream = {
+    controller: {
+      abort: () => {
+        cancelled = true;
+        abort();
+      },
+    },
+    async *[Symbol.asyncIterator]() {
+      for (const content of contents) {
+        if (cancelled) return;
+        await new Promise((r) => setTimeout(r, 5));
+        yield { choices: [{ delta: { content } }] };
+      }
+    },
+  };
+  return { stream, abort };
+}
+
 beforeEach(() => {
   createMock.mockReset();
   createClientMock.mockReset();
@@ -91,6 +118,32 @@ describe("POST /api/turn/reply", () => {
     expect(call.messages.at(-1)).toEqual({ role: "user", content: "Please start the conversation." });
   });
 
+  it("passes the request's abort signal to the model call", async () => {
+    createMock.mockResolvedValueOnce(chunks(["Hi"]));
+    const r = req({ history: [], topic: "Travelling in Japan", level: "B1" });
+    await POST(r);
+    expect(createMock.mock.calls[0][1]).toEqual({ signal: r.signal });
+  });
+
+  it("aborts the upstream stream when the client cancels the response body", async () => {
+    const { stream, abort } = mockStream(["one", "two", "three", "four"]);
+    createMock.mockResolvedValueOnce(stream);
+    const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe('data: {"delta":"one"}\n\n');
+    await reader.cancel();
+    expect(abort).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setTimeout(r, 40));
+  });
+
+  it("ends the stream without an error event when the upstream aborts", async () => {
+    createMock.mockResolvedValueOnce(abortingChunks());
+    const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
+    const text = await res.text();
+    expect(text).toBe('data: {"delta":"Hi"}\n\n' + "data: [DONE]\n\n");
+  });
+
   it("streams a user's text turn appended after the mapped history", async () => {
     createMock.mockResolvedValueOnce(chunks(["Sure!"]));
     const res = await POST(
@@ -123,13 +176,38 @@ describe("POST /api/turn/reply", () => {
     );
   });
 
-  it("returns a plain JSON error (not SSE) on an immediate upstream failure", async () => {
+  it("returns a plain JSON 502 (not SSE) on an immediate upstream 5xx", async () => {
     createMock.mockRejectedValueOnce(new APIError(503, { message: "upstream down" }, "upstream down", new Headers()));
     const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(502);
     expect(res.headers.get("content-type")).not.toBe("text/event-stream");
     const json = await res.json();
     expect(json.error).toMatch(/upstream down/i);
+  });
+
+  it("429s with the upstream message on an upstream 429", async () => {
+    createMock.mockRejectedValueOnce(new APIError(429, { message: "rate limited" }, "rate limited", new Headers()));
+    const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
+    expect(res.status).toBe(429);
+    const json = await res.json();
+    expect(json.error).toMatch(/rate limited/i);
+  });
+
+  it("502s with an auth hint (not the upstream text) on an upstream 403", async () => {
+    createMock.mockRejectedValueOnce(new APIError(403, { message: "key revoked sk-or-abc" }, "key revoked sk-or-abc", new Headers()));
+    const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(json.error).toMatch(/OPENROUTER_API_KEY/);
+    expect(json.error).not.toMatch(/sk-or-abc/);
+  });
+
+  it("502s with a generic message on a non-SDK error", async () => {
+    createMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    const res = await POST(req({ history: [], topic: "Travelling in Japan", level: "B1" }));
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(json.error).toBe("Unexpected error calling the model");
   });
 
   it("500s when the OpenRouter API key is missing", async () => {

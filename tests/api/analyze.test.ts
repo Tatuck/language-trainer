@@ -79,6 +79,13 @@ describe("POST /api/turn/analyze", () => {
     expect(call.reasoning_effort).toBe("low");
   });
 
+  it("passes the request's abort signal to the model call", async () => {
+    createMock.mockResolvedValueOnce(completion(JSON.stringify(validAnalysis)));
+    const r = req({ text: "Hello.", level: "B1", lang: "es" });
+    await POST(r);
+    expect(createMock.mock.calls[0][1]).toEqual({ signal: r.signal });
+  });
+
   it("retries once with medium effort and succeeds", async () => {
     createMock.mockResolvedValueOnce(completion("not json"));
     createMock.mockResolvedValueOnce(completion(JSON.stringify(validAnalysis)));
@@ -98,12 +105,37 @@ describe("POST /api/turn/analyze", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
   });
 
-  it("502s with the upstream message on an OpenAI APIError", async () => {
+  it("429s with the upstream message on an upstream 429", async () => {
     createMock.mockRejectedValueOnce(new APIError(429, { message: "rate limited" }, "rate limited", new Headers()));
+    const res = await POST(req({ text: "Hello.", level: "B1", lang: "es" }));
+    expect(res.status).toBe(429);
+    const json = await res.json();
+    expect(json.error).toMatch(/rate limited/i);
+  });
+
+  it("502s with the upstream message on an upstream 5xx", async () => {
+    createMock.mockRejectedValueOnce(new APIError(503, { message: "upstream down" }, "upstream down", new Headers()));
     const res = await POST(req({ text: "Hello.", level: "B1", lang: "es" }));
     expect(res.status).toBe(502);
     const json = await res.json();
-    expect(json.error).toMatch(/rate limited/i);
+    expect(json.error).toMatch(/upstream down/i);
+  });
+
+  it("502s with an auth hint (not the upstream text) on an upstream 401", async () => {
+    createMock.mockRejectedValueOnce(new APIError(401, { message: "invalid key sk-or-abc" }, "invalid key sk-or-abc", new Headers()));
+    const res = await POST(req({ text: "Hello.", level: "B1", lang: "es" }));
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(json.error).toMatch(/OPENROUTER_API_KEY/);
+    expect(json.error).not.toMatch(/sk-or-abc/);
+  });
+
+  it("502s with a generic message on a non-SDK error", async () => {
+    createMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    const res = await POST(req({ text: "Hello.", level: "B1", lang: "es" }));
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(json.error).toBe("Unexpected error calling the model");
   });
 
   it("500s when the OpenRouter API key is missing", async () => {

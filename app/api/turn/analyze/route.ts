@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { APIError } from "openai";
 import { createClient, resolveModels } from "@/lib/openrouter";
 import { analyzerSystem } from "@/lib/prompts";
 import { AnalysisSchema, analysisJsonSchema, type Analysis } from "@/lib/schema";
@@ -7,6 +6,7 @@ import type { ApiError } from "@/lib/types";
 import { buildAnalyzeUserContent } from "@/lib/llm/analyze-message";
 import { requestTooLarge } from "@/lib/llm/body-limit";
 import { AnalyzeRequestSchema } from "@/lib/llm/requests";
+import { upstreamErrorResponse } from "@/lib/llm/upstream-error";
 
 function badRequest(error: string): NextResponse<ApiError> {
   return NextResponse.json({ error }, { status: 400 });
@@ -43,18 +43,21 @@ export async function POST(request: Request): Promise<Response> {
   const userContent = buildAnalyzeUserContent({ audio, text, hint });
 
   const attempt = async (reasoningEffort: "low" | "medium") => {
-    const completion = await client.chat.completions.create({
-      model: audioModel,
-      reasoning_effort: reasoningEffort,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: userContent },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: "analysis", strict: true, schema: analysisJsonSchema },
+    const completion = await client.chat.completions.create(
+      {
+        model: audioModel,
+        reasoning_effort: reasoningEffort,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: userContent },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "analysis", strict: true, schema: analysisJsonSchema },
+        },
       },
-    });
+      { signal: request.signal }
+    );
     const raw = completion.choices[0]?.message?.content ?? "";
     let json: unknown;
     try {
@@ -74,8 +77,7 @@ export async function POST(request: Request): Promise<Response> {
     }
   } catch (err) {
     console.error(`POST /api/turn/analyze: model ${audioModel} request failed`, err);
-    const message = err instanceof APIError ? err.message : "Unexpected error calling the model";
-    return NextResponse.json<ApiError>({ error: message }, { status: 502 });
+    return upstreamErrorResponse(err);
   }
 
   if (!outcome.ok) {
