@@ -1,4 +1,5 @@
 import type { SessionSummary } from "./db";
+import { throwIfNotOk } from "./http";
 import { newId } from "./ids";
 import { parseStoredSession } from "./session-normalise";
 import type { FeedbackLang, Level, Session } from "./types";
@@ -19,23 +20,9 @@ function sessionUrl(id: string): string {
   return `${BASE}/${encodeURIComponent(id)}`;
 }
 
-/** Error carried by a non-2xx response: the `{error}` body when it is one, else the status text. */
-async function responseError(res: Response): Promise<Error> {
-  let message: string | null = null;
-  try {
-    const body: unknown = await res.json();
-    if (typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string") {
-      message = (body as { error: string }).error;
-    }
-  } catch {
-    message = null;
-  }
-  return new Error(message ?? (res.statusText.length > 0 ? res.statusText : `HTTP ${res.status}`));
-}
-
 async function request(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, init);
-  if (!res.ok) throw await responseError(res);
+  await throwIfNotOk(res);
   return res;
 }
 
@@ -48,7 +35,7 @@ export async function loadSessions(): Promise<SessionSummary[]> {
 export async function loadSession(id: string): Promise<Session | null> {
   const res = await fetch(sessionUrl(id), { method: "GET" });
   if (res.status === 404) return null;
-  if (!res.ok) throw await responseError(res);
+  await throwIfNotOk(res);
   return (await res.json()) as Session;
 }
 

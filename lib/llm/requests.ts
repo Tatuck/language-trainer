@@ -23,8 +23,6 @@ export const AnalyzeRequestSchema = z
     message: "Provide exactly one of audio or text",
   });
 
-export type AnalyzeRequestBody = z.infer<typeof AnalyzeRequestSchema>;
-
 const HistoryMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string().max(MAX_TEXT_CHARS),
@@ -39,5 +37,3 @@ export const ReplyRequestSchema = z.object({
   topic: z.string().min(1).max(MAX_TOPIC_CHARS),
   level: z.enum(LEVELS),
 });
-
-export type ReplyRequestBody = z.infer<typeof ReplyRequestSchema>;
