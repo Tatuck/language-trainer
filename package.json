@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "typecheck": "next typegen && tsc --noEmit",
+    "spike": "tsx --env-file=.env.local scripts/spike-audio.ts"
   },
   "dependencies": {
     "next": "16.3.5",
