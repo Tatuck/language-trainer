@@ -9,6 +9,7 @@ import { SessionHeader } from "@/components/SessionHeader";
 import { TextInput } from "@/components/TextInput";
 import { UserTurn } from "@/components/UserTurn";
 import { analyze, hasPendingTurn, historyFromTurns, streamReply } from "@/lib/api";
+import { errorText } from "@/lib/http";
 import { newId } from "@/lib/ids";
 import { loadSession, saveSession } from "@/lib/store";
 import type {
@@ -26,11 +27,6 @@ type OpenPopover = { turnId: string; index: number };
 const SCROLL_STICK_PX = 80;
 /** Streaming deltas arrive many times a second; the server is written at most this often. */
 const PERSIST_DEBOUNCE_MS = 300;
-
-function errorText(err: unknown): string {
-  if (err instanceof Error && err.message.length > 0) return err.message;
-  return "Something went wrong.";
-}
 
 function updateTurn(session: Session, id: string, patch: (turn: Turn) => Turn): Session {
   return { ...session, turns: session.turns.map((t) => (t.id === id ? patch(t) : t)) };

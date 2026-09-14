@@ -1,3 +1,4 @@
+import { throwIfNotOk } from "./http";
 import { AnalysisSchema } from "./schema";
 import type { Analysis, AnalyzeRequest, HistoryMessage, ReplyRequest, Turn } from "./types";
 import mockAnalysis from "@/fixtures/analysis.json";
@@ -96,20 +97,6 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function errorMessage(res: Response): Promise<string> {
-  const fallback = res.statusText || `HTTP ${res.status}`;
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    return fallback;
-  }
-  if (typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string") {
-    return (body as { error: string }).error;
-  }
-  return fallback;
-}
-
 function postJson(url: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return fetch(url, {
     method: "POST",
@@ -126,7 +113,7 @@ export async function analyze(req: AnalyzeRequest, signal?: AbortSignal): Promis
     return AnalysisSchema.parse(mockAnalysis);
   }
   const res = await postJson("/api/turn/analyze", req, signal);
-  if (!res.ok) throw new Error(await errorMessage(res));
+  await throwIfNotOk(res);
   const json: unknown = await res.json();
   return AnalysisSchema.parse(json);
 }
@@ -194,7 +181,7 @@ export async function streamReply(
   if (MOCK) return mockStreamReply(req, onDelta, signal);
 
   const res = await postJson("/api/turn/reply", req, signal);
-  if (!res.ok) throw new Error(await errorMessage(res));
+  await throwIfNotOk(res);
   if (!res.body) throw new Error("Reply response has no body");
 
   const reader = res.body.getReader();

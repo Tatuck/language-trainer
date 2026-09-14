@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { startTransition, useCallback, useEffect, useState } from "react";
+import { errorText } from "@/lib/http";
 import { FEEDBACK_LANGS, LEVELS } from "@/lib/prompts";
 import {
   createSession,
@@ -24,11 +25,6 @@ function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function errorText(err: unknown): string {
-  if (err instanceof Error && err.message.length > 0) return err.message;
-  return "Something went wrong.";
 }
 
 export default function Home() {
