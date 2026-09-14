@@ -1,132 +1,69 @@
+import type { SessionSummary } from "./db";
 import { newId } from "./ids";
-import type { BotTurn, FeedbackLang, Level, Session, Turn } from "./types";
+import { parseStoredSession } from "./session-normalise";
+import type { FeedbackLang, Level, Session } from "./types";
 
-export const STORAGE_KEY = "lt:sessions:v1";
-
-/** Message shown on a learner turn whose analysis never finished before the page went away. */
-export const INTERRUPTED_ANALYSIS = "Analysis was interrupted before it finished. Say it again to retry.";
-
-type Operation = "load" | "save" | "delete";
-
-/** Every failing operation is reported; the caller's data is kept in memory and nothing throws. */
-function warn(operation: Operation, step: "read" | "write", err: unknown): void {
-  console.warn(`[store] ${operation} failed (localStorage ${step}); continuing without persistence.`, err);
-}
-
-function storage(): Storage | null {
-  if (typeof localStorage === "undefined" || localStorage === null) return null;
-  return localStorage;
-}
-
-/** A turn as it may sit in storage: bot turns written before `error` existed lack the field. */
-type StoredTurn = Turn | (Omit<BotTurn, "error"> & { error?: string | null });
-
-function isStoredTurn(value: unknown): value is StoredTurn {
-  if (typeof value !== "object" || value === null) return false;
-  const t = value as Record<string, unknown>;
-  if (typeof t.id !== "string") return false;
-  if (t.role === "user") return "analysis" in t && "error" in t;
-  if (t.role === "bot") return typeof t.text === "string";
-  return false;
-}
-
-function normaliseTurn(turn: StoredTurn): Turn {
-  if (turn.role === "bot") return { ...turn, error: turn.error ?? null };
-  return turn;
-}
-
-type StoredSession = Omit<Session, "turns"> & { turns: StoredTurn[] };
-
-function isStoredSession(value: unknown): value is StoredSession {
-  if (typeof value !== "object" || value === null) return false;
-  const s = value as Record<string, unknown>;
-  return (
-    typeof s.id === "string" &&
-    typeof s.topic === "string" &&
-    typeof s.level === "string" &&
-    typeof s.lang === "string" &&
-    typeof s.createdAt === "string" &&
-    Array.isArray(s.turns) &&
-    s.turns.every(isStoredTurn)
-  );
-}
-
-function normaliseSession(session: StoredSession): Session {
-  return { ...session, turns: session.turns.map(normaliseTurn) };
-}
-
-/** Read every stored session, in storage order. Any failure yields an empty list. */
-function readAll(operation: Operation): Session[] {
-  const s = storage();
-  if (!s) return [];
-  try {
-    const raw = s.getItem(STORAGE_KEY);
-    if (raw === null) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isStoredSession).map(normaliseSession);
-  } catch (err) {
-    warn(operation, "read", err);
-    return [];
-  }
-}
-
-function writeAll(operation: Operation, sessions: Session[]): void {
-  const s = storage();
-  if (!s) return;
-  try {
-    s.setItem(STORAGE_KEY, JSON.stringify(sessions));
-  } catch (err) {
-    warn(operation, "write", err);
-  }
-}
+export type { SessionSummary };
 
 /**
- * Copy of a turn with no in-flight state, so a reload never shows a stuck spinner.
- * Returns null for a bot turn that never received any text (nothing worth keeping).
+ * Browser-side client for `/api/sessions`. Sessions live in the server's SQLite file; this module
+ * only speaks HTTP (plus a one-time import of the localStorage store it replaced).
  */
-function settleTurn(turn: Turn): Turn | null {
-  if (turn.role === "bot") {
-    if (!turn.streaming) return turn;
-    if (turn.text.length === 0) return null;
-    return { ...turn, streaming: false };
+
+/** Key of the pre-SQLite localStorage store; only read by `migrateLocalStorage`. */
+export const STORAGE_KEY = "lt:sessions:v1";
+
+const BASE = "/api/sessions";
+
+function sessionUrl(id: string): string {
+  return `${BASE}/${encodeURIComponent(id)}`;
+}
+
+/** Error carried by a non-2xx response: the `{error}` body when it is one, else the status text. */
+async function responseError(res: Response): Promise<Error> {
+  let message: string | null = null;
+  try {
+    const body: unknown = await res.json();
+    if (typeof body === "object" && body !== null && typeof (body as { error?: unknown }).error === "string") {
+      message = (body as { error: string }).error;
+    }
+  } catch {
+    message = null;
   }
-  if (turn.analysis === null && turn.error === null) {
-    return { ...turn, error: INTERRUPTED_ANALYSIS };
-  }
-  return turn;
+  return new Error(message ?? (res.statusText.length > 0 ? res.statusText : `HTTP ${res.status}`));
 }
 
-function settle(session: Session): Session {
-  const turns: Turn[] = [];
-  for (const turn of session.turns) {
-    const settled = settleTurn(turn);
-    if (settled) turns.push(settled);
-  }
-  return { ...session, turns };
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, init);
+  if (!res.ok) throw await responseError(res);
+  return res;
 }
 
-/** All sessions, newest first. */
-export function loadSessions(): Session[] {
-  return readAll("load").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+/** Summaries of every session, newest first. */
+export async function loadSessions(): Promise<SessionSummary[]> {
+  const res = await request(BASE, { method: "GET" });
+  return (await res.json()) as SessionSummary[];
 }
 
-export function loadSession(id: string): Session | null {
-  return readAll("load").find((s) => s.id === id) ?? null;
+export async function loadSession(id: string): Promise<Session | null> {
+  const res = await fetch(sessionUrl(id), { method: "GET" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw await responseError(res);
+  return (await res.json()) as Session;
 }
 
-/** Insert or replace the session with the same id. The given object is not mutated. */
-export function saveSession(session: Session): void {
-  const settled = settle(session);
-  const all = readAll("save");
-  const index = all.findIndex((s) => s.id === session.id);
-  if (index === -1) all.push(settled);
-  else all[index] = settled;
-  writeAll("save", all);
+/** Insert or replace the session with the same id. The server settles in-flight turns. */
+export async function saveSession(session: Session): Promise<void> {
+  await request(sessionUrl(session.id), {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(session),
+  });
 }
 
+/** Pure: nothing is persisted until the first `saveSession`. */
 export function createSession(input: { topic: string; level: Level; lang: FeedbackLang }): Session {
-  const session: Session = {
+  return {
     id: newId(),
     topic: input.topic,
     level: input.level,
@@ -134,13 +71,66 @@ export function createSession(input: { topic: string; level: Level; lang: Feedba
     createdAt: new Date().toISOString(),
     turns: [],
   };
-  saveSession(session);
-  return session;
 }
 
-export function deleteSession(id: string): void {
-  const all = readAll("delete");
-  const remaining = all.filter((s) => s.id !== id);
-  if (remaining.length === all.length) return;
-  writeAll("delete", remaining);
+export async function deleteSession(id: string): Promise<void> {
+  await request(sessionUrl(id), { method: "DELETE" });
+}
+
+function storage(): Storage | null {
+  if (typeof localStorage === "undefined" || localStorage === null) return null;
+  return localStorage;
+}
+
+/** Sessions the old store left in localStorage, or null when there is nothing readable. */
+function readLegacySessions(s: Storage): Session[] | null {
+  let raw: string | null;
+  try {
+    raw = s.getItem(STORAGE_KEY);
+  } catch (err) {
+    console.warn("[store] migration skipped: localStorage read failed.", err);
+    return null;
+  }
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn("[store] migration skipped: legacy sessions are not JSON; the key is left in place.", err);
+    return null;
+  }
+  if (!Array.isArray(parsed)) {
+    console.warn("[store] migration skipped: legacy value is not a list; the key is left in place.");
+    return null;
+  }
+  const sessions: Session[] = [];
+  let skipped = 0;
+  for (const entry of parsed) {
+    const session = parseStoredSession(entry);
+    if (session) sessions.push(session);
+    else skipped += 1;
+  }
+  if (skipped > 0) console.warn(`[store] migration: ${skipped} legacy entries were not session-shaped and were dropped.`);
+  return sessions;
+}
+
+/**
+ * One-time import of the localStorage store into the server: PUT each session, then remove the
+ * key. Returns how many were imported. A failing PUT rethrows and leaves the key, so the next
+ * page load retries (PUT is an upsert, so partial imports are harmless).
+ */
+export async function migrateLocalStorage(): Promise<number> {
+  const s = storage();
+  if (!s) return 0;
+  const sessions = readLegacySessions(s);
+  if (sessions === null) return 0;
+  for (const session of sessions) {
+    await saveSession(session);
+  }
+  try {
+    s.removeItem(STORAGE_KEY);
+  } catch (err) {
+    console.warn("[store] migration: sessions imported but the legacy key could not be removed.", err);
+  }
+  return sessions.length;
 }

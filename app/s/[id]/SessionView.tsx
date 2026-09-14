@@ -24,7 +24,7 @@ type TurnInput = { audio?: { wavBase64: string }; text?: string; hint: string | 
 type OpenPopover = { turnId: string; index: number };
 
 const SCROLL_STICK_PX = 80;
-/** Streaming deltas arrive many times a second; localStorage is written at most this often. */
+/** Streaming deltas arrive many times a second; the server is written at most this often. */
 const PERSIST_DEBOUNCE_MS = 300;
 
 function errorText(err: unknown): string {
@@ -39,6 +39,8 @@ function updateTurn(session: Session, id: string, patch: (turn: Turn) => Turn): 
 export function SessionView({ id }: { id: string }) {
   const [session, setSession] = useState<Session | null>(null);
   const [missing, setMissing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [interim, setInterim] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [open, setOpen] = useState<OpenPopover | null>(null);
@@ -48,6 +50,10 @@ export function SessionView({ id }: { id: string }) {
   const stickRef = useRef(true);
   const sessionRef = useRef<Session | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Saves run one after another so an older snapshot can never overwrite a newer one. */
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  /** The last snapshot handed to the server; the same object is never sent twice. */
+  const lastQueuedRef = useRef<Session | null>(null);
 
   const runReply = useCallback(async (botId: string, req: ReplyRequest, signal: AbortSignal) => {
     try {
@@ -88,38 +94,68 @@ export function SessionView({ id }: { id: string }) {
     }
   }, []);
 
-  // Load the session from localStorage after hydration; a fresh session gets the bot opener.
+  // Load the session from the server after hydration; a fresh session gets the bot opener.
   useEffect(() => {
     const controller = new AbortController();
     abortRef.current = controller;
-    startTransition(() => {
-      const loaded = loadSession(id);
+    let cancelled = false;
+    async function load() {
+      let loaded: Session | null;
+      try {
+        loaded = await loadSession(id);
+      } catch (err) {
+        if (!cancelled) setLoadError(errorText(err));
+        return;
+      }
+      if (cancelled) return;
       if (!loaded) {
         setMissing(true);
         return;
       }
       if (loaded.turns.length > 0) {
-        setSession(loaded);
+        // What came back is what the server holds; nothing to write until the learner acts.
+        lastQueuedRef.current = loaded;
+        startTransition(() => setSession(loaded));
         return;
       }
       const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true, error: null };
-      setSession({ ...loaded, turns: [bot] });
+      const opened: Session = { ...loaded, turns: [bot] };
+      startTransition(() => setSession(opened));
       void runReply(bot.id, { history: [], topic: loaded.topic, level: loaded.level }, controller.signal);
-    });
-    return () => controller.abort();
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [id, runReply]);
 
   // Derived, so it can never lag behind the turns it describes.
   const inFlight = session ? hasPendingTurn(session.turns) : false;
 
-  // Persist with a trailing debounce; the store strips in-flight state so a reload never shows a stuck spinner.
+  // Persist with a trailing debounce; the server strips in-flight state so a reload never shows a stuck spinner.
+  // A failed save is noted under the conversation and never blocks it; the next change retries.
+  const persist = useCallback((snapshot: Session) => {
+    if (lastQueuedRef.current === snapshot) return;
+    lastQueuedRef.current = snapshot;
+    saveChainRef.current = saveChainRef.current
+      .then(() => saveSession(snapshot))
+      .then(
+        () => setSaveError(null),
+        (err: unknown) => {
+          console.warn("[session] save failed; the conversation continues unsaved.", err);
+          setSaveError(errorText(err));
+        },
+      );
+  }, []);
+
   const flushSave = useCallback(() => {
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
-    if (sessionRef.current) saveSession(sessionRef.current);
-  }, []);
+    if (sessionRef.current) persist(sessionRef.current);
+  }, [persist]);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -127,9 +163,9 @@ export function SessionView({ id }: { id: string }) {
     if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null;
-      saveSession(session);
+      persist(session);
     }, PERSIST_DEBOUNCE_MS);
-  }, [session]);
+  }, [session, persist]);
 
   // A finished turn and an unmount must not wait for the debounce.
   useEffect(() => {
@@ -169,12 +205,12 @@ export function SessionView({ id }: { id: string }) {
     void runReply(bot.id, { ...learner, history, topic: session.topic, level: session.level }, controller.signal);
   }
 
-  if (missing) {
+  if (missing || loadError !== null) {
     return (
       <main className="mx-auto w-full max-w-2xl px-4 py-20 sm:px-6">
-        <h1 className="text-lg font-medium">Session not found</h1>
+        <h1 className="text-lg font-medium">{missing ? "Session not found" : "Could not load the session"}</h1>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          It may have been deleted, or it belongs to another browser.
+          {missing ? "It may have been deleted." : loadError}
         </p>
         <Link href="/" className="mt-6 inline-block text-sm underline underline-offset-4">
           Back to the start
@@ -225,6 +261,11 @@ export function SessionView({ id }: { id: string }) {
           {notice && (
             <p role="alert" className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
               {notice}
+            </p>
+          )}
+          {saveError !== null && (
+            <p role="status" className="mb-2 text-xs text-zinc-400 dark:text-zinc-500">
+              Not saved: {saveError}
             </p>
           )}
           <div className="flex items-center gap-3">
