@@ -153,6 +153,11 @@ export function historyFromTurns(turns: Turn[]): HistoryMessage[] {
   return history;
 }
 
+/** True while any turn is still waiting on the server: a streaming reply or an unanalysed learner turn. */
+export function hasPendingTurn(turns: Turn[]): boolean {
+  return turns.some((t) => (t.role === "bot" ? t.streaming : t.analysis === null && t.error === null));
+}
+
 function isOpener(req: ReplyRequest): boolean {
   return req.history.length === 0 && !req.audio && !req.text;
 }

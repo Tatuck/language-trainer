@@ -285,6 +285,29 @@ describe("mock mode", () => {
   });
 });
 
+describe("hasPendingTurn", () => {
+  let hasPendingTurn: Api["hasPendingTurn"];
+  beforeEach(async () => {
+    ({ hasPendingTurn } = await import("@/lib/api"));
+  });
+
+  it("is false for an empty or fully settled conversation", () => {
+    expect(hasPendingTurn([])).toBe(false);
+    expect(
+      hasPendingTurn([
+        { role: "bot", id: "b1", text: "Hi", streaming: false, error: null },
+        { role: "user", id: "u1", hint: "x", analysis: null, error: "Analysis failed" },
+        { role: "bot", id: "b2", text: "partial", streaming: false, error: "Stream failed" },
+      ])
+    ).toBe(false);
+  });
+
+  it("is true while a bot reply streams or a learner turn awaits analysis", () => {
+    expect(hasPendingTurn([{ role: "bot", id: "b1", text: "", streaming: true, error: null }])).toBe(true);
+    expect(hasPendingTurn([{ role: "user", id: "u1", hint: "x", analysis: null, error: null }])).toBe(true);
+  });
+});
+
 describe("historyFromTurns", () => {
   let historyFromTurns: Api["historyFromTurns"];
   beforeEach(async () => {
