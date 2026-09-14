@@ -42,3 +42,6 @@ next-env.d.ts
 
 # keep example env
 !.env.example
+
+# local Claude Code settings
+.claude/settings.local.json

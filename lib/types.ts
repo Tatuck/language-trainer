@@ -46,7 +46,15 @@ export type AnalyzeRequest = {
 
 export type AnalyzeResponse = Analysis;
 
-/** Body of POST /api/turn/reply. Streams `text/event-stream`; each event `data:` is a text delta, final event `data: [DONE]`. */
+/**
+ * Body of POST /api/turn/reply. Response is `text/event-stream`:
+ *   data: {"delta":"partial text"}\n\n   (repeated)
+ *   data: {"error":"message"}\n\n        (at most once, then stream ends)
+ *   data: [DONE]\n\n
+ * Audio is forwarded to the chat model only when it is the same model as the audio model;
+ * otherwise the server uses `text`, falling back to `hint`. With neither (and no audio usable) → 400.
+ * Empty `history` + no learner input = ask the bot to open the conversation.
+ */
 export type ReplyRequest = {
   audio?: { wavBase64: string };
   text?: string;
