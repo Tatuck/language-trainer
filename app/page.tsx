@@ -2,11 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { FEEDBACK_LANGS, LEVELS } from "@/lib/prompts";
-import { createSession, deleteSession, loadSessions } from "@/lib/store";
+import {
+  createSession,
+  deleteSession,
+  loadSessions,
+  migrateLocalStorage,
+  saveSession,
+  type SessionSummary,
+} from "@/lib/store";
 import { TOPICS } from "@/lib/topics";
-import type { FeedbackLang, Level, Session } from "@/lib/types";
+import type { FeedbackLang, Level } from "@/lib/types";
 
 const LANG_LABEL: Record<FeedbackLang, string> = { es: "Spanish", en: "English" };
 
@@ -19,18 +26,51 @@ function formatDate(iso: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+function errorText(err: unknown): string {
+  if (err instanceof Error && err.message.length > 0) return err.message;
+  return "Something went wrong.";
+}
+
 export default function Home() {
   const router = useRouter();
   const [topicId, setTopicId] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
   const [level, setLevel] = useState<Level>("B1");
   const [lang, setLang] = useState<FeedbackLang>("es");
-  const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const list = await loadSessions();
+      startTransition(() => {
+        setSessions(list);
+        setListError(null);
+      });
+    } catch (err) {
+      setListError(errorText(err));
+    }
+  }, []);
 
   useEffect(() => {
-    // localStorage only exists in the browser; read it after hydration as a non-urgent update.
-    startTransition(() => setSessions(loadSessions()));
-  }, []);
+    let cancelled = false;
+    async function init() {
+      // Sessions written by the old localStorage store are imported once, before the list is read.
+      try {
+        const imported = await migrateLocalStorage();
+        if (!cancelled && imported > 0) setNotice(`Imported ${imported} ${imported === 1 ? "session" : "sessions"}`);
+      } catch (err) {
+        if (!cancelled) setNotice(`Could not import older sessions: ${errorText(err)}`);
+      }
+      if (!cancelled) await refresh();
+    }
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
 
   const customTopic = custom.trim();
   const presetTopic = TOPICS.find((t) => t.id === topicId)?.title ?? null;
@@ -41,23 +81,49 @@ export default function Home() {
     setCustom("");
   }
 
-  function start() {
-    if (!topic) return;
+  async function start() {
+    if (!topic || starting) return;
     const session = createSession({ topic, level, lang });
+    setStarting(true);
+    try {
+      await saveSession(session);
+    } catch (err) {
+      setStarting(false);
+      setNotice(`Could not start the session: ${errorText(err)}`);
+      return;
+    }
     router.push(`/s/${session.id}`);
   }
 
-  function remove(id: string) {
-    deleteSession(id);
-    setSessions(loadSessions());
+  async function remove(id: string) {
+    try {
+      await deleteSession(id);
+    } catch (err) {
+      setNotice(`Could not delete the session: ${errorText(err)}`);
+      return;
+    }
+    await refresh();
   }
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 pt-12 pb-16 sm:px-6 sm:pt-20">
-      <h1 className="text-2xl font-semibold tracking-tight">LanguageTrainer</h1>
+      <header className="flex items-baseline justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">LanguageTrainer</h1>
+        <Link
+          href="/notebook"
+          className="shrink-0 text-sm text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
+          Notebook
+        </Link>
+      </header>
       <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
         Pick a topic, talk, and get your English corrected sentence by sentence.
       </p>
+      {notice && (
+        <p role="status" className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+          {notice}
+        </p>
+      )}
 
       <section className="mt-10" aria-labelledby="topic-heading">
         <h2 id="topic-heading" className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
@@ -135,8 +201,8 @@ export default function Home() {
 
       <button
         type="button"
-        onClick={start}
-        disabled={!topic}
+        onClick={() => void start()}
+        disabled={!topic || starting}
         className="mt-10 w-full rounded-md bg-zinc-900 px-4 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto sm:px-8 dark:bg-zinc-100 dark:text-zinc-900"
       >
         Start
@@ -146,14 +212,21 @@ export default function Home() {
         <h2 id="previous-heading" className="text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
           Previous sessions
         </h2>
-        {sessions === null ? (
+        {listError !== null ? (
+          <p role="alert" className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+            Could not load sessions: {listError}{" "}
+            <button type="button" onClick={() => void refresh()} className="underline underline-offset-4">
+              Retry
+            </button>
+          </p>
+        ) : sessions === null ? (
           <p className="mt-3 text-sm text-zinc-400 dark:text-zinc-500">Loading…</p>
         ) : sessions.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">No sessions yet. Start one above.</p>
         ) : (
           <ul className="mt-3 divide-y divide-zinc-200 dark:divide-zinc-800">
             {sessions.map((s) => {
-              const turns = s.turns.filter((t) => t.role === "user").length;
+              const turns = s.turnCount;
               return (
                 <li key={s.id} className="flex items-center justify-between gap-4 py-3">
                   <Link href={`/s/${s.id}`} className="group min-w-0 flex-1">
@@ -166,7 +239,7 @@ export default function Home() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => remove(s.id)}
+                    onClick={() => void remove(s.id)}
                     aria-label={`Delete session about ${s.topic}`}
                     className="shrink-0 text-xs text-zinc-400 underline-offset-4 hover:text-zinc-900 hover:underline dark:hover:text-zinc-100"
                   >
