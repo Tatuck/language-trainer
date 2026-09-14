@@ -23,6 +23,7 @@ export function TextInput({ disabled = false, onSend }: Props) {
     <form onSubmit={submit} className="flex min-w-0 flex-1 items-center gap-2">
       <input
         type="text"
+        name="message"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         disabled={disabled}

@@ -81,6 +81,7 @@ export default function Home() {
           <span className="sr-only">Custom topic</span>
           <input
             type="text"
+            name="topic"
             value={custom}
             onChange={(e) => {
               setCustom(e.target.value);

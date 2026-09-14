@@ -158,7 +158,7 @@ function isOpener(req: ReplyRequest): boolean {
 
 function mockReplyText(req: ReplyRequest): string {
   if (isOpener(req)) {
-    return `Hello, nice to meet you. What would you like to tell me about ${req.topic.toLowerCase()}?`;
+    return `Hello, nice to meet you. Our topic today is "${req.topic}", so what comes to mind first?`;
   }
   return "That sounds interesting, and I see what you mean. What made you feel that way?";
 }
