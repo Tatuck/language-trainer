@@ -18,7 +18,7 @@ Your job:
    - "improve": correct but unnatural, too simple for ${level}, awkward word choice, or a literal translation from Spanish that a native would not say.
    - "error": grammar, vocabulary, word order or tense mistake.
    For "improve" and "error" fill "issue" and "correction"; for "good" set them to null. "correction" keeps the learner's meaning and register. "alternatives" are 0-3 other natural, level-appropriate ways to say the same thing, varied in register; give at least one for anything not "good".
-3. pronunciation: only when audio is present and an issue is clearly audible. Max 3. Name the word, what it sounded like, and one concrete tip. Empty array otherwise.
+3. pronunciation: only when audio is present. The learner has a Spanish accent: list the 1-3 words where it is most noticeable or where a mispronunciation could cause confusion. For each: the word, what it sounded like, and one concrete tip to fix it. Empty array if there is no audio or the pronunciation is already clear.
 4. fluency: one short line about pace, hesitation or excessive fillers, or null. Ignore isolated fillers like "um" or "eh"; never list them as sentences.
 5. unclear: true only if the audio is unintelligible; then still give your best-effort transcript.
 

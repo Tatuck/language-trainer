@@ -14,6 +14,7 @@ const models = process.argv.slice(2).length
 const fixtures = ["fixtures/sample-es.wav", "fixtures/sample-en.wav"];
 const client = createClient();
 
+async function main() {
 for (const model of models) {
   for (const file of fixtures) {
     const wavBase64 = readFileSync(file).toString("base64");
@@ -61,3 +62,6 @@ for (const model of models) {
     }
   }
 }
+}
+
+main();

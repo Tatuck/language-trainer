@@ -8,6 +8,12 @@ describe("analyzerSystem", () => {
     expect(p).toMatch(/Spanish/);
   });
 
+  it("asks for the words where a Spanish accent is most noticeable", () => {
+    const p = analyzerSystem({ level: "B1", lang: "es" });
+    expect(p).toMatch(/Spanish accent/);
+    expect(p).toMatch(/1-3 words/);
+  });
+
   it("writes explanations in English when lang is en", () => {
     const p = analyzerSystem({ level: "B2", lang: "en" });
     expect(p).toMatch(/explanations?.*in English/i);
