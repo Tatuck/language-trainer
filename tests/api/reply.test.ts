@@ -46,6 +46,19 @@ describe("POST /api/turn/reply", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("413s before reading the body when Content-Length exceeds 6 MB", async () => {
+    const r = new Request("http://x/api", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "6000001" },
+      body: JSON.stringify({ history: [], topic: "Travelling in Japan", level: "B1" }),
+    });
+    const res = await POST(r);
+    expect(res.status).toBe(413);
+    const json = await res.json();
+    expect(json.error).toBe("Request too large");
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("400s on malformed JSON", async () => {
     const res = await POST(req(undefined, "not json"));
     expect(res.status).toBe(400);

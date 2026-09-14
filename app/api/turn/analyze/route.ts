@@ -5,6 +5,7 @@ import { analyzerSystem } from "@/lib/prompts";
 import { AnalysisSchema, analysisJsonSchema, type Analysis } from "@/lib/schema";
 import type { ApiError } from "@/lib/types";
 import { buildAnalyzeUserContent } from "@/lib/llm/analyze-message";
+import { requestTooLarge } from "@/lib/llm/body-limit";
 import { AnalyzeRequestSchema } from "@/lib/llm/requests";
 
 function badRequest(error: string): NextResponse<ApiError> {
@@ -12,6 +13,9 @@ function badRequest(error: string): NextResponse<ApiError> {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const tooLarge = requestTooLarge(request);
+  if (tooLarge) return tooLarge;
+
   let body: unknown;
   try {
     body = await request.json();

@@ -3,6 +3,7 @@ import { APIError } from "openai";
 import { createClient, resolveModels } from "@/lib/openrouter";
 import { tutorSystem } from "@/lib/prompts";
 import type { ApiError } from "@/lib/types";
+import { requestTooLarge } from "@/lib/llm/body-limit";
 import { capHistory, pickUserMessage } from "@/lib/llm/reply-message";
 import { ReplyRequestSchema } from "@/lib/llm/requests";
 import { sseEvent } from "@/lib/llm/sse";
@@ -12,6 +13,9 @@ function badRequest(error: string): NextResponse<ApiError> {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const tooLarge = requestTooLarge(request);
+  if (tooLarge) return tooLarge;
+
   let body: unknown;
   try {
     body = await request.json();
