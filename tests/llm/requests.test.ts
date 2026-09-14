@@ -91,3 +91,49 @@ describe("ReplyRequestSchema", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("request size limits", () => {
+  const WAV_MAX = 4_000_000;
+  const TEXT_MAX = 4000;
+  const TOPIC_MAX = 200;
+  const HISTORY_MAX = 50;
+
+  it("accepts wavBase64 at the limit and rejects one byte over", () => {
+    const at = { audio: { wavBase64: "A".repeat(WAV_MAX) }, level: "B1", lang: "es" };
+    const over = { audio: { wavBase64: "A".repeat(WAV_MAX + 1) }, level: "B1", lang: "es" };
+    expect(AnalyzeRequestSchema.safeParse(at).success).toBe(true);
+    expect(AnalyzeRequestSchema.safeParse(over).success).toBe(false);
+    expect(ReplyRequestSchema.safeParse({ ...at, history: [], topic: "T" }).success).toBe(true);
+    expect(ReplyRequestSchema.safeParse({ ...over, history: [], topic: "T" }).success).toBe(false);
+  });
+
+  it("accepts text and hint at 4000 chars and rejects 4001", () => {
+    const at = "x".repeat(TEXT_MAX);
+    const over = "x".repeat(TEXT_MAX + 1);
+    expect(AnalyzeRequestSchema.safeParse({ text: at, hint: at, level: "B1", lang: "es" }).success).toBe(true);
+    expect(AnalyzeRequestSchema.safeParse({ text: over, level: "B1", lang: "es" }).success).toBe(false);
+    expect(AnalyzeRequestSchema.safeParse({ text: "ok", hint: over, level: "B1", lang: "es" }).success).toBe(false);
+    expect(ReplyRequestSchema.safeParse({ text: at, hint: at, history: [], topic: "T", level: "B1" }).success).toBe(true);
+    expect(ReplyRequestSchema.safeParse({ text: over, history: [], topic: "T", level: "B1" }).success).toBe(false);
+    expect(ReplyRequestSchema.safeParse({ hint: over, history: [], topic: "T", level: "B1" }).success).toBe(false);
+  });
+
+  it("accepts topic at 200 chars and rejects 201", () => {
+    expect(ReplyRequestSchema.safeParse({ history: [], topic: "t".repeat(TOPIC_MAX), level: "B1" }).success).toBe(true);
+    expect(ReplyRequestSchema.safeParse({ history: [], topic: "t".repeat(TOPIC_MAX + 1), level: "B1" }).success).toBe(false);
+  });
+
+  it("accepts 50 history entries and rejects 51", () => {
+    const entry = { role: "user", content: "hi" };
+    const at = Array.from({ length: HISTORY_MAX }, () => entry);
+    expect(ReplyRequestSchema.safeParse({ history: at, topic: "T", level: "B1" }).success).toBe(true);
+    expect(ReplyRequestSchema.safeParse({ history: [...at, entry], topic: "T", level: "B1" }).success).toBe(false);
+  });
+
+  it("accepts history content at 4000 chars and rejects 4001", () => {
+    const ok = [{ role: "assistant", content: "c".repeat(TEXT_MAX) }];
+    const bad = [{ role: "assistant", content: "c".repeat(TEXT_MAX + 1) }];
+    expect(ReplyRequestSchema.safeParse({ history: ok, topic: "T", level: "B1" }).success).toBe(true);
+    expect(ReplyRequestSchema.safeParse({ history: bad, topic: "T", level: "B1" }).success).toBe(false);
+  });
+});
