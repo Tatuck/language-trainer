@@ -24,7 +24,7 @@ type Props = {
   onClose: () => void;
 };
 
-/** Details for one sentence, anchored under it. Esc or a click outside closes it. */
+/** Details for one sentence, anchored under it. Esc or a click outside closes it; focus returns to the sentence. */
 export function SentencePopover({ sentence, top, anchor, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -49,6 +49,17 @@ export function SentencePopover({ sentence, top, anchor, onClose }: Props) {
   useEffect(() => {
     ref.current?.focus({ preventScroll: true });
   }, []);
+
+  // On close (Esc, the close button, an outside click, a second click on the sentence) hand focus
+  // back to the sentence that opened the popover, unless the closing click already focused
+  // something else (another sentence, the text input).
+  useEffect(() => {
+    const opener = anchor;
+    return () => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) opener?.focus({ preventScroll: true });
+    };
+  }, [anchor]);
 
   return (
     <div
