@@ -1,4 +1,8 @@
+"use client";
+
+import { useEffect, useRef } from "react";
 import type { BotTurn as BotTurnData } from "@/lib/types";
+import { speak, stopSpeaking, useTtsEnabled } from "@/lib/tts";
 
 type Props = {
   turn: BotTurnData;
@@ -9,6 +13,20 @@ type Props = {
  * stopped early keeps whatever text arrived and shows why underneath, muted.
  */
 export function BotTurn({ turn }: Props) {
+  const [ttsEnabled] = useTtsEnabled();
+  // Speak only on the streaming → done transition, never for turns restored from storage.
+  const wasStreaming = useRef(turn.streaming);
+  useEffect(() => {
+    if (wasStreaming.current && !turn.streaming && ttsEnabled && turn.error === null) {
+      speak(turn.text);
+    }
+    wasStreaming.current = turn.streaming;
+  }, [turn.streaming, turn.text, turn.error, ttsEnabled]);
+  // A new reply starting, or leaving the page, silences whatever is still being read.
+  useEffect(() => {
+    if (turn.streaming) stopSpeaking();
+    return stopSpeaking;
+  }, [turn.streaming]);
   return (
     <article aria-live="polite" aria-busy={turn.streaming}>
       <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Tutor</p>
