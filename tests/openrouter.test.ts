@@ -33,4 +33,11 @@ describe("createClient", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
     expect(createClient().baseURL).toBe("https://openrouter.ai/api/v1");
   });
+
+  it("times out after 60 s and retries at most once", () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const client = createClient();
+    expect(client.timeout).toBe(60000);
+    expect(client.maxRetries).toBe(1);
+  });
 });

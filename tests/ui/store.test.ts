@@ -40,7 +40,6 @@ describe("store", () => {
     storage = fakeStorage();
     vi.stubGlobal("localStorage", storage);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // The module warns once per load; import it fresh so each test starts quiet.
     vi.resetModules();
     ({ STORAGE_KEY, createSession, deleteSession, loadSession, loadSessions, saveSession } = await import("@/lib/store"));
   });
@@ -92,10 +91,10 @@ describe("store", () => {
     const s: Session = {
       ...base,
       turns: [
-        { role: "bot", id: "b1", text: "Hi there. What do you like?", streaming: false },
+        { role: "bot", id: "b1", text: "Hi there. What do you like?", streaming: false, error: null },
         { role: "user", id: "u1", hint: "I like food", analysis: null, error: null },
-        { role: "bot", id: "b2", text: "Nice, so you", streaming: true },
-        { role: "bot", id: "b3", text: "", streaming: true },
+        { role: "bot", id: "b2", text: "Nice, so you", streaming: true, error: null },
+        { role: "bot", id: "b3", text: "", streaming: true, error: null },
       ],
     };
     saveSession(s);
@@ -103,7 +102,7 @@ describe("store", () => {
     expect(loaded).not.toBeNull();
     const turns = loaded!.turns;
     expect(turns.map((t) => t.id)).toEqual(["b1", "u1", "b2"]);
-    expect(turns[2]).toEqual({ role: "bot", id: "b2", text: "Nice, so you", streaming: false });
+    expect(turns[2]).toEqual({ role: "bot", id: "b2", text: "Nice, so you", streaming: false, error: null });
     const user = turns[1];
     expect(user.role).toBe("user");
     if (user.role === "user") {
@@ -137,12 +136,34 @@ describe("store", () => {
     expect(turns[1]).toMatchObject({ analysis: null, error: "Network down" });
   });
 
-  it("returns empty and warns once when storage holds invalid JSON", () => {
+  it("returns empty and warns on every failing load when storage holds invalid JSON", () => {
     storage.map.set(STORAGE_KEY, "{not json");
     expect(loadSessions()).toEqual([]);
     expect(loadSessions()).toEqual([]);
     expect(loadSession("s1")).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(String(warn.mock.calls[0][0])).toMatch(/load/);
+  });
+
+  it("normalises bot turns stored before the error field existed to error: null", () => {
+    storage.map.set(
+      STORAGE_KEY,
+      JSON.stringify([
+        {
+          ...base,
+          turns: [
+            { role: "bot", id: "b1", text: "Hi there.", streaming: false },
+            { role: "user", id: "u1", hint: "hey", analysis: null, error: "x" },
+            { role: "bot", id: "b2", text: "partial", streaming: false, error: "Stream failed" },
+          ],
+        },
+      ])
+    );
+    const turns = loadSession("s1")!.turns;
+    expect(turns[0]).toEqual({ role: "bot", id: "b1", text: "Hi there.", streaming: false, error: null });
+    expect(turns[1]).toEqual({ role: "user", id: "u1", hint: "hey", analysis: null, error: "x" });
+    expect(turns[2]).toEqual({ role: "bot", id: "b2", text: "partial", streaming: false, error: "Stream failed" });
+    expect(loadSessions()[0].turns[0]).toMatchObject({ error: null });
   });
 
   it("ignores entries that are not session-shaped", () => {
@@ -150,24 +171,35 @@ describe("store", () => {
     expect(loadSessions().map((s) => s.id)).toEqual(["s1"]);
   });
 
-  it("returns empty and warns once when getItem throws (private mode)", () => {
+  it("returns empty and warns on every failing load when getItem throws (private mode)", () => {
     storage.getItem.mockImplementation(() => {
       throw new Error("SecurityError");
     });
     expect(loadSessions()).toEqual([]);
     expect(loadSessions()).toEqual([]);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("is a no-op and warns once when setItem throws (quota)", () => {
+  it("is a no-op and warns per failing save when setItem throws (quota)", () => {
     storage.setItem.mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveSession(base)).not.toThrow();
-    expect(() => deleteSession("s1")).not.toThrow();
     const created = createSession({ topic: "Work", level: "C1", lang: "es" });
     expect(created.topic).toBe("Work");
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0][0])).toMatch(/save/);
+    expect(String(warn.mock.calls[1][0])).toMatch(/save/);
+  });
+
+  it("is a no-op and warns per failing delete when setItem throws", () => {
+    saveSession(base);
+    storage.setItem.mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    expect(() => deleteSession("s1")).not.toThrow();
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/delete/);
   });
 
   it("behaves as empty when localStorage is not defined (server render)", () => {

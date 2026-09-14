@@ -1,9 +1,6 @@
-"use client";
-
-import { use } from "react";
 import { SessionView } from "./SessionView";
 
-export default function SessionPage({ params }: PageProps<"/s/[id]">) {
-  const { id } = use(params);
+export default async function SessionPage({ params }: PageProps<"/s/[id]">) {
+  const { id } = await params;
   return <SessionView id={id} />;
 }

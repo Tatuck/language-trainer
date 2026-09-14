@@ -8,7 +8,7 @@ import Recorder from "@/components/Recorder";
 import { SessionHeader } from "@/components/SessionHeader";
 import { TextInput } from "@/components/TextInput";
 import { UserTurn } from "@/components/UserTurn";
-import { analyze, historyFromTurns, streamReply } from "@/lib/api";
+import { analyze, hasPendingTurn, historyFromTurns, streamReply } from "@/lib/api";
 import { newId } from "@/lib/ids";
 import { loadSession, saveSession } from "@/lib/store";
 import type {
@@ -24,6 +24,8 @@ type TurnInput = { audio?: { wavBase64: string }; text?: string; hint: string | 
 type OpenPopover = { turnId: string; index: number };
 
 const SCROLL_STICK_PX = 80;
+/** Streaming deltas arrive many times a second; localStorage is written at most this often. */
+const PERSIST_DEBOUNCE_MS = 300;
 
 function errorText(err: unknown): string {
   if (err instanceof Error && err.message.length > 0) return err.message;
@@ -38,14 +40,14 @@ export function SessionView({ id }: { id: string }) {
   const [session, setSession] = useState<Session | null>(null);
   const [missing, setMissing] = useState(false);
   const [interim, setInterim] = useState<string | null>(null);
-  const [inFlight, setInFlight] = useState(false);
-  const [failedBots, setFailedBots] = useState<ReadonlySet<string>>(() => new Set());
   const [notice, setNotice] = useState<string | null>(null);
   const [open, setOpen] = useState<OpenPopover | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
+  const sessionRef = useRef<Session | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const runReply = useCallback(async (botId: string, req: ReplyRequest, signal: AbortSignal) => {
     try {
@@ -64,9 +66,9 @@ export function SessionView({ id }: { id: string }) {
     } catch (err) {
       if (signal.aborted) return;
       const message = errorText(err);
-      setFailedBots((prev) => new Set(prev).add(botId));
+      // Keep whatever text streamed before the failure; the error is shown under it.
       setSession((prev) =>
-        prev ? updateTurn(prev, botId, (t) => (t.role === "bot" ? { ...t, text: message, streaming: false } : t)) : prev,
+        prev ? updateTurn(prev, botId, (t) => (t.role === "bot" ? { ...t, error: message, streaming: false } : t)) : prev,
       );
     }
   }, []);
@@ -100,20 +102,41 @@ export function SessionView({ id }: { id: string }) {
         setSession(loaded);
         return;
       }
-      const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true };
+      const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true, error: null };
       setSession({ ...loaded, turns: [bot] });
-      setInFlight(true);
-      void runReply(bot.id, { history: [], topic: loaded.topic, level: loaded.level }, controller.signal).then(() => {
-        if (!controller.signal.aborted) setInFlight(false);
-      });
+      void runReply(bot.id, { history: [], topic: loaded.topic, level: loaded.level }, controller.signal);
     });
     return () => controller.abort();
   }, [id, runReply]);
 
-  // Persist after every state change; the store strips in-flight state so a reload never shows a stuck spinner.
+  // Derived, so it can never lag behind the turns it describes.
+  const inFlight = session ? hasPendingTurn(session.turns) : false;
+
+  // Persist with a trailing debounce; the store strips in-flight state so a reload never shows a stuck spinner.
+  const flushSave = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (sessionRef.current) saveSession(sessionRef.current);
+  }, []);
+
   useEffect(() => {
-    if (session) saveSession(session);
+    sessionRef.current = session;
+    if (!session) return;
+    if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      saveSession(session);
+    }, PERSIST_DEBOUNCE_MS);
   }, [session]);
+
+  // A finished turn and an unmount must not wait for the debounce.
+  useEffect(() => {
+    if (!inFlight) flushSave();
+  }, [inFlight, flushSave]);
+
+  useEffect(() => flushSave, [flushSave]);
 
   // Follow the conversation unless the reader scrolled up.
   useEffect(() => {
@@ -133,22 +156,17 @@ export function SessionView({ id }: { id: string }) {
     if (!controller) return;
     const history = historyFromTurns(session.turns);
     const user: UserTurnData = { role: "user", id: newId(), hint: input.hint, analysis: null, error: null };
-    const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true };
+    const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true, error: null };
     const learner = input.audio ? { audio: input.audio, hint: input.hint ?? undefined } : { text: input.text };
 
     stickRef.current = true;
     setInterim(null);
     setNotice(null);
     setOpen(null);
-    setInFlight(true);
     setSession((prev) => (prev ? { ...prev, turns: [...prev.turns, user, bot] } : prev));
 
-    void Promise.allSettled([
-      runAnalyze(user.id, { ...learner, level: session.level, lang: session.lang }, controller.signal),
-      runReply(bot.id, { ...learner, history, topic: session.topic, level: session.level }, controller.signal),
-    ]).then(() => {
-      if (!controller.signal.aborted) setInFlight(false);
-    });
+    void runAnalyze(user.id, { ...learner, level: session.level, lang: session.lang }, controller.signal);
+    void runReply(bot.id, { ...learner, history, topic: session.topic, level: session.level }, controller.signal);
   }
 
   if (missing) {
@@ -181,7 +199,7 @@ export function SessionView({ id }: { id: string }) {
         <main className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-4 py-8 sm:px-6">
           {session.turns.map((turn) =>
             turn.role === "bot" ? (
-              <BotTurn key={turn.id} turn={turn} failed={failedBots.has(turn.id)} />
+              <BotTurn key={turn.id} turn={turn} />
             ) : (
               <UserTurn
                 key={turn.id}

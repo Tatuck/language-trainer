@@ -285,6 +285,29 @@ describe("mock mode", () => {
   });
 });
 
+describe("hasPendingTurn", () => {
+  let hasPendingTurn: Api["hasPendingTurn"];
+  beforeEach(async () => {
+    ({ hasPendingTurn } = await import("@/lib/api"));
+  });
+
+  it("is false for an empty or fully settled conversation", () => {
+    expect(hasPendingTurn([])).toBe(false);
+    expect(
+      hasPendingTurn([
+        { role: "bot", id: "b1", text: "Hi", streaming: false, error: null },
+        { role: "user", id: "u1", hint: "x", analysis: null, error: "Analysis failed" },
+        { role: "bot", id: "b2", text: "partial", streaming: false, error: "Stream failed" },
+      ])
+    ).toBe(false);
+  });
+
+  it("is true while a bot reply streams or a learner turn awaits analysis", () => {
+    expect(hasPendingTurn([{ role: "bot", id: "b1", text: "", streaming: true, error: null }])).toBe(true);
+    expect(hasPendingTurn([{ role: "user", id: "u1", hint: "x", analysis: null, error: null }])).toBe(true);
+  });
+});
+
 describe("historyFromTurns", () => {
   let historyFromTurns: Api["historyFromTurns"];
   beforeEach(async () => {
@@ -301,9 +324,9 @@ describe("historyFromTurns", () => {
 
   it("maps completed turns to plain-text history, preferring the analysed transcript", () => {
     const history = historyFromTurns([
-      { role: "bot", id: "b1", text: "Hi! How old are you?", streaming: false },
+      { role: "bot", id: "b1", text: "Hi! How old are you?", streaming: false, error: null },
       { role: "user", id: "u1", hint: "i have 25 years", analysis, error: null },
-      { role: "bot", id: "b2", text: "Oh, so you're 25.", streaming: false },
+      { role: "bot", id: "b2", text: "Oh, so you're 25.", streaming: false, error: null },
       { role: "user", id: "u2", hint: "yes exactly", analysis: null, error: "Analysis failed" },
     ]);
     expect(history).toEqual([
@@ -316,12 +339,21 @@ describe("historyFromTurns", () => {
 
   it("skips streaming or empty bot turns and user turns with nothing to say", () => {
     const history = historyFromTurns([
-      { role: "bot", id: "b1", text: "", streaming: false },
-      { role: "bot", id: "b2", text: "partial", streaming: true },
+      { role: "bot", id: "b1", text: "", streaming: false, error: null },
+      { role: "bot", id: "b2", text: "partial", streaming: true, error: null },
       { role: "user", id: "u1", hint: null, analysis: null, error: "Mic failed" },
       { role: "user", id: "u2", hint: "   ", analysis: null, error: "Mic failed" },
       { role: "user", id: "u3", hint: "still analysing", analysis: null, error: null },
     ]);
     expect(history).toEqual([]);
+  });
+
+  it("skips bot turns that ended in an error, even when partial text arrived", () => {
+    const history = historyFromTurns([
+      { role: "bot", id: "b1", text: "Hi! How old", streaming: false, error: "Stream failed" },
+      { role: "user", id: "u1", hint: "i am 25", analysis: null, error: "Analysis failed" },
+      { role: "bot", id: "b2", text: "", streaming: false, error: "Upstream authentication failed" },
+    ]);
+    expect(history).toEqual([{ role: "user", content: "i am 25" }]);
   });
 });

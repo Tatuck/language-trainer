@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { blobToWavBase64 } from "@/lib/audio/wav";
 import { createLiveTranscriber, isSpeechRecognitionSupported, type LiveTranscriber } from "@/lib/audio/speech";
+import { withTimeout } from "@/lib/audio/with-timeout";
+
+/** How long to wait for the live transcriber's final text after stop() before sending the WAV without a hint. */
+const TRANSCRIPT_GRACE_MS = 1500;
 
 export type RecorderProps = {
   disabled?: boolean;
@@ -33,6 +37,10 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
   const [recording, setRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
+  const mountedRef = useRef(true);
+  const startingRef = useRef(false);
+  /** Set once the current recording has fired onResult or onError; guarantees exactly one of them. */
+  const settledRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -58,40 +66,89 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
     }
   }, []);
 
+  const stopMediaRecorder = useCallback((mediaRecorder: MediaRecorder | null) => {
+    if (!mediaRecorder) return;
+    try {
+      if (mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    } catch (err) {
+      console.warn("MediaRecorder.stop() failed; continuing with the chunks captured so far", err);
+    }
+  }, []);
+
+  const deliverResult = useCallback(
+    (r: { wavBase64: string; hint: string | null; durationMs: number }) => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      onResult(r);
+    },
+    [onResult]
+  );
+
+  const deliverError = useCallback(
+    (message: string) => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      onError(message);
+    },
+    [onError]
+  );
+
+  /** Releases everything held by the current recording and returns the button to idle. */
+  const resetRecording = useCallback(() => {
+    clearTimer();
+    mediaRecorderRef.current = null;
+    transcriberRef.current = null;
+    blobPromiseRef.current = null;
+    transcriptPromiseRef.current = null;
+    stopTracks();
+    if (mountedRef.current) {
+      setRecording(false);
+      setElapsedSeconds(0);
+    }
+  }, [clearTimer, stopTracks]);
+
   const stopRecording = useCallback(() => {
     clearTimer();
     transcriberRef.current?.stop();
-    mediaRecorderRef.current?.stop();
-
+    const mediaRecorder = mediaRecorderRef.current;
     const blobPromise = blobPromiseRef.current;
     const transcriptPromise = transcriptPromiseRef.current ?? Promise.resolve(null);
-    if (!blobPromise) return;
+    if (!mediaRecorder || !blobPromise) return;
+    // A second stop() while this one settles is a no-op.
+    blobPromiseRef.current = null;
+
+    stopMediaRecorder(mediaRecorder);
 
     const startedAt = startTimeRef.current;
-    void Promise.all([blobPromise, transcriptPromise])
+    // The WAV must always reach onResult: a transcriber that never reports its final text
+    // (engine ended without onend, tab lost focus) only costs the hint, not the turn.
+    void Promise.all([blobPromise, withTimeout(transcriptPromise, TRANSCRIPT_GRACE_MS, null)])
       .then(async ([blob, hint]) => {
         const wavBase64 = await blobToWavBase64(blob);
-        onResult({ wavBase64, hint, durationMs: Date.now() - startedAt });
+        deliverResult({ wavBase64, hint, durationMs: Date.now() - startedAt });
       })
       .catch((err: unknown) => {
-        onError(describeError(err));
+        deliverError(describeError(err));
       })
-      .finally(() => {
-        mediaRecorderRef.current = null;
-        transcriberRef.current = null;
-        blobPromiseRef.current = null;
-        transcriptPromiseRef.current = null;
-        setRecording(false);
-        setElapsedSeconds(0);
-      });
-  }, [clearTimer, onError, onResult]);
+      .finally(resetRecording);
+  }, [clearTimer, deliverError, deliverResult, resetRecording, stopMediaRecorder]);
 
   const startRecording = useCallback(async () => {
+    if (startingRef.current || mediaRecorderRef.current) return;
+    startingRef.current = true;
+    settledRef.current = false;
+
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      onError(describeError(err));
+      startingRef.current = false;
+      deliverError(describeError(err));
+      return;
+    }
+    startingRef.current = false;
+    if (!mountedRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
     streamRef.current = stream;
@@ -112,12 +169,23 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
       };
     });
 
+    mediaRecorder.onerror = (event) => {
+      const cause = "error" in event && event.error instanceof Error ? event.error.message : "unknown error";
+      console.error("MediaRecorder error", event);
+      transcriberRef.current?.stop();
+      stopMediaRecorder(mediaRecorder);
+      deliverError(`Recording failed: ${cause}`);
+      resetRecording();
+    };
+
     if (isSpeechRecognitionSupported()) {
       transcriptPromiseRef.current = new Promise<string | null>((resolve) => {
         const transcriber = createLiveTranscriber({
           onInterim,
           onFinal: (text) => resolve(text.trim() ? text : null),
-          onError: () => resolve(null),
+          // Fatal recognition errors still end in onFinal (see lib/audio/speech.ts), so the
+          // promise settles there; the WAV is unaffected.
+          onError: (err) => console.warn("Live transcription stopped", err),
         });
         transcriberRef.current = transcriber;
         transcriber?.start();
@@ -127,7 +195,14 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
     }
 
     startTimeRef.current = Date.now();
-    mediaRecorder.start();
+    try {
+      mediaRecorder.start();
+    } catch (err) {
+      transcriberRef.current?.stop();
+      deliverError(`Recording failed: ${describeError(err)}`);
+      resetRecording();
+      return;
+    }
     setElapsedSeconds(0);
     setRecording(true);
 
@@ -138,7 +213,7 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
         stopRecording();
       }
     }, 1000);
-  }, [onError, onInterim, stopRecording, stopTracks]);
+  }, [deliverError, onInterim, resetRecording, stopMediaRecorder, stopRecording, stopTracks]);
 
   const handleToggle = useCallback(() => {
     if (disabled) return;
@@ -150,15 +225,15 @@ export default function Recorder({ disabled = false, maxSeconds = 60, onInterim,
   }, [disabled, recording, startRecording, stopRecording]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       clearTimer();
       transcriberRef.current?.stop();
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
+      stopMediaRecorder(mediaRecorderRef.current);
       stopTracks();
     };
-  }, [clearTimer, stopTracks]);
+  }, [clearTimer, stopMediaRecorder, stopTracks]);
 
   return (
     <button

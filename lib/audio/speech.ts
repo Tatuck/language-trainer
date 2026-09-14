@@ -66,7 +66,22 @@ export function createLiveTranscriber(opts: LiveTranscriberOptions): LiveTranscr
   };
 
   recognition.onerror = (event) => {
-    opts.onError(new Error(event.error));
+    switch (event.error) {
+      case "no-speech":
+        // Silence is not a failure; Chrome fires this on every pause and onend restarts.
+        return;
+      case "aborted":
+      case "network":
+        // Transient: the engine will end and onend restarts it while recording continues.
+        console.warn(`Speech recognition ${event.error}; restarting`);
+        return;
+      default:
+        // not-allowed, service-not-allowed, audio-capture, language-not-supported,
+        // bad-grammar or anything unknown: restarting cannot help. Stop for good, but let
+        // onend still deliver whatever was transcribed so far.
+        stopRequested = true;
+        opts.onError(new Error(event.error));
+    }
   };
 
   recognition.onend = () => {

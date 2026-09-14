@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
-import { APIError } from "openai";
 import { createClient, resolveModels } from "@/lib/openrouter";
 import { tutorSystem } from "@/lib/prompts";
 import type { ApiError } from "@/lib/types";
+import { requestTooLarge } from "@/lib/llm/body-limit";
 import { capHistory, pickUserMessage } from "@/lib/llm/reply-message";
 import { ReplyRequestSchema } from "@/lib/llm/requests";
 import { sseEvent } from "@/lib/llm/sse";
+import { isAbortError, upstreamErrorResponse } from "@/lib/llm/upstream-error";
 
 function badRequest(error: string): NextResponse<ApiError> {
   return NextResponse.json({ error }, { status: 400 });
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const tooLarge = requestTooLarge(request);
+  if (tooLarge) return tooLarge;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -49,41 +53,68 @@ export async function POST(request: Request): Promise<Response> {
 
   let stream;
   try {
-    stream = await client.chat.completions.create({
-      model: models.chat,
-      reasoning_effort: "low",
-      stream: true,
-      messages: [
-        { role: "system", content: tutorSystem({ topic, level }) },
-        ...history.map((m): { role: "user" | "assistant"; content: string } => ({ role: m.role, content: m.content })),
-        { role: "user", content: picked.content },
-      ],
-    });
+    stream = await client.chat.completions.create(
+      {
+        model: models.chat,
+        reasoning_effort: "low",
+        stream: true,
+        messages: [
+          { role: "system", content: tutorSystem({ topic, level }) },
+          ...history.map((m): { role: "user" | "assistant"; content: string } => ({ role: m.role, content: m.content })),
+          { role: "user", content: picked.content },
+        ],
+      },
+      { signal: request.signal }
+    );
   } catch (err) {
     console.error(`POST /api/turn/reply: model ${models.chat} request failed`, err);
-    if (err instanceof APIError) {
-      return NextResponse.json<ApiError>({ error: err.message }, { status: err.status ?? 502 });
-    }
-    return NextResponse.json<ApiError>({ error: "Unexpected error calling the model" }, { status: 502 });
+    return upstreamErrorResponse(err);
   }
 
   const encoder = new TextEncoder();
   const chatModel = models.chat;
   const responseBody = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // Once the client disconnects the controller is closed and enqueue/close throw; after the
+      // first such failure nothing else can reach the client, so later writes are skipped.
+      let closed = false;
+      const safeEnqueue = (event: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(event));
+        } catch {
+          closed = true;
+        }
+      };
+      const safeClose = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // Already closed by a cancel(); nothing left to release.
+        }
+      };
       try {
         for await (const chunk of stream) {
           const delta = chunk.choices[0]?.delta?.content;
-          if (delta) controller.enqueue(encoder.encode(sseEvent({ delta })));
+          if (delta) safeEnqueue(sseEvent({ delta }));
         }
       } catch (err) {
-        console.error(`POST /api/turn/reply: stream from model ${chatModel} failed mid-way`, err);
-        const message = err instanceof Error ? err.message : "Stream failed";
-        controller.enqueue(encoder.encode(sseEvent({ error: message })));
+        if (isAbortError(err)) {
+          console.warn(`POST /api/turn/reply: stream from model ${chatModel} aborted`);
+        } else {
+          console.error(`POST /api/turn/reply: stream from model ${chatModel} failed mid-way`, err);
+          const message = err instanceof Error ? err.message : "Stream failed";
+          safeEnqueue(sseEvent({ error: message }));
+        }
       } finally {
-        controller.enqueue(encoder.encode(sseEvent("[DONE]")));
-        controller.close();
+        safeEnqueue(sseEvent("[DONE]"));
+        safeClose();
       }
+    },
+    cancel() {
+      stream.controller.abort();
     },
   });
 

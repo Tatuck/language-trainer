@@ -1,15 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { mapSentencesToSpans, type Verdict } from "@/lib/schema";
+import { mapSentencesToSpans } from "@/lib/schema";
 import type { UserTurn as UserTurnData } from "@/lib/types";
 import { SentencePopover } from "./SentencePopover";
-
-const DECORATION: Record<Verdict, string> = {
-  good: "decoration-emerald-500/50",
-  improve: "decoration-amber-500",
-  error: "decoration-red-500",
-};
+import { VERDICT_UNDERLINE } from "./verdict-underline";
 
 type Props = {
   turn: UserTurnData;
@@ -118,8 +113,8 @@ export function UserTurn({ turn, listening = false, openIndex, onOpenChange }: P
                   aria-expanded={openIndex === span.sentenceIndex}
                   onClick={onSentenceClick(span.sentenceIndex)}
                   onKeyDown={onSentenceKey(span.sentenceIndex)}
-                  className={`cursor-pointer rounded-sm underline decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-500 ${
-                    DECORATION[analysis.sentences[span.sentenceIndex].verdict]
+                  className={`cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-500 ${
+                    VERDICT_UNDERLINE[analysis.sentences[span.sentenceIndex].verdict]
                   }`}
                 >
                   {span.text}
@@ -144,6 +139,7 @@ export function UserTurn({ turn, listening = false, openIndex, onOpenChange }: P
                   <button
                     type="button"
                     aria-expanded={openChip === i}
+                    aria-controls={`${turn.id}-pron-${i}`}
                     onClick={() => setOpenChip(openChip === i ? null : i)}
                     className="rounded-full border border-zinc-300 px-2.5 py-0.5 text-xs text-zinc-600 hover:border-zinc-500 aria-expanded:border-zinc-500 aria-expanded:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-400 dark:aria-expanded:border-zinc-400 dark:aria-expanded:bg-zinc-800"
                   >
@@ -154,12 +150,16 @@ export function UserTurn({ turn, listening = false, openIndex, onOpenChange }: P
             </ul>
           )}
 
-          {openChip !== null && analysis.pronunciation[openChip] && (
-            <p className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-400">
-              <span className="font-medium text-zinc-800 dark:text-zinc-200">{analysis.pronunciation[openChip].issue}</span>{" "}
-              {analysis.pronunciation[openChip].tip}
+          {analysis.pronunciation.map((note, i) => (
+            <p
+              key={i}
+              id={`${turn.id}-pron-${i}`}
+              hidden={openChip !== i}
+              className="mt-1.5 text-sm text-zinc-600 dark:text-zinc-400"
+            >
+              <span className="font-medium text-zinc-800 dark:text-zinc-200">{note.issue}</span> {note.tip}
             </p>
-          )}
+          ))}
 
           {analysis.fluency && <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{analysis.fluency}</p>}
         </div>
