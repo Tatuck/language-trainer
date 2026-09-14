@@ -145,16 +145,66 @@ describe("createLiveTranscriber", () => {
     expect(onFinal).not.toHaveBeenCalled();
   });
 
-  it("wraps recognition errors and forwards them via onError", () => {
-    vi.stubGlobal("window", { SpeechRecognition: FakeSpeechRecognition });
-    const onError = vi.fn();
-    const transcriber = createLiveTranscriber({ onInterim: vi.fn(), onFinal: vi.fn(), onError });
-    transcriber?.start();
-    const instance = FakeSpeechRecognition.instances[0];
+  describe("onerror classes", () => {
+    function setup() {
+      vi.stubGlobal("window", { SpeechRecognition: FakeSpeechRecognition });
+      const onFinal = vi.fn();
+      const onError = vi.fn();
+      const transcriber = createLiveTranscriber({ onInterim: vi.fn(), onFinal, onError });
+      transcriber?.start();
+      const instance = FakeSpeechRecognition.instances[0];
+      instance.onresult?.(fakeEvent(0, [fakeResult("so far", true)]));
+      return { instance, onFinal, onError };
+    }
 
-    instance.onerror?.({ error: "no-speech" });
+    it("ignores no-speech: no onError, no warning, and onend still restarts", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { instance, onFinal, onError } = setup();
 
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect((onError.mock.calls[0][0] as Error).message).toBe("no-speech");
+      instance.onerror?.({ error: "no-speech" });
+      instance.onend?.();
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(instance.start).toHaveBeenCalledTimes(2);
+      expect(onFinal).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it.each(["aborted", "network"])("treats %s as recoverable: warns, no onError, onend restarts", (error) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { instance, onFinal, onError } = setup();
+
+      instance.onerror?.({ error });
+      instance.onend?.();
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain(error);
+      expect(instance.start).toHaveBeenCalledTimes(2);
+      expect(onFinal).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it.each([
+      "not-allowed",
+      "service-not-allowed",
+      "audio-capture",
+      "language-not-supported",
+      "bad-grammar",
+      "something-unknown",
+    ])("treats %s as fatal: onError fires, onend does not restart and still delivers onFinal", (error) => {
+      const { instance, onFinal, onError } = setup();
+
+      instance.onerror?.({ error });
+      instance.onend?.();
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(expect.any(Error));
+      expect((onError.mock.calls[0][0] as Error).message).toBe(error);
+      expect(instance.start).toHaveBeenCalledTimes(1);
+      expect(onFinal).toHaveBeenCalledTimes(1);
+      expect(onFinal).toHaveBeenCalledWith("so far");
+    });
   });
 });
