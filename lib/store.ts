@@ -6,13 +6,11 @@ export const STORAGE_KEY = "lt:sessions:v1";
 /** Message shown on a learner turn whose analysis never finished before the page went away. */
 export const INTERRUPTED_ANALYSIS = "Analysis was interrupted before it finished. Say it again to retry.";
 
-let warned = false;
+type Operation = "load" | "save" | "delete";
 
-/** Log a storage failure once per page load; later failures stay quiet so the console is not flooded. */
-function warnOnce(action: string, err: unknown): void {
-  if (warned) return;
-  warned = true;
-  console.warn(`[store] localStorage ${action} failed; continuing without persistence.`, err);
+/** Every failing operation is reported; the caller's data is kept in memory and nothing throws. */
+function warn(operation: Operation, step: "read" | "write", err: unknown): void {
+  console.warn(`[store] ${operation} failed (localStorage ${step}); continuing without persistence.`, err);
 }
 
 function storage(): Storage | null {
@@ -44,7 +42,7 @@ function isSession(value: unknown): value is Session {
 }
 
 /** Read every stored session, in storage order. Any failure yields an empty list. */
-function readAll(): Session[] {
+function readAll(operation: Operation): Session[] {
   const s = storage();
   if (!s) return [];
   try {
@@ -54,18 +52,18 @@ function readAll(): Session[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isSession);
   } catch (err) {
-    warnOnce("read", err);
+    warn(operation, "read", err);
     return [];
   }
 }
 
-function writeAll(sessions: Session[]): void {
+function writeAll(operation: Operation, sessions: Session[]): void {
   const s = storage();
   if (!s) return;
   try {
     s.setItem(STORAGE_KEY, JSON.stringify(sessions));
   } catch (err) {
-    warnOnce("write", err);
+    warn(operation, "write", err);
   }
 }
 
@@ -96,21 +94,21 @@ function settle(session: Session): Session {
 
 /** All sessions, newest first. */
 export function loadSessions(): Session[] {
-  return readAll().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return readAll("load").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function loadSession(id: string): Session | null {
-  return readAll().find((s) => s.id === id) ?? null;
+  return readAll("load").find((s) => s.id === id) ?? null;
 }
 
 /** Insert or replace the session with the same id. The given object is not mutated. */
 export function saveSession(session: Session): void {
   const settled = settle(session);
-  const all = readAll();
+  const all = readAll("save");
   const index = all.findIndex((s) => s.id === session.id);
   if (index === -1) all.push(settled);
   else all[index] = settled;
-  writeAll(all);
+  writeAll("save", all);
 }
 
 export function createSession(input: { topic: string; level: Level; lang: FeedbackLang }): Session {
@@ -127,8 +125,8 @@ export function createSession(input: { topic: string; level: Level; lang: Feedba
 }
 
 export function deleteSession(id: string): void {
-  const all = readAll();
+  const all = readAll("delete");
   const remaining = all.filter((s) => s.id !== id);
   if (remaining.length === all.length) return;
-  writeAll(remaining);
+  writeAll("delete", remaining);
 }

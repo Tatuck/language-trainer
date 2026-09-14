@@ -40,7 +40,6 @@ describe("store", () => {
     storage = fakeStorage();
     vi.stubGlobal("localStorage", storage);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // The module warns once per load; import it fresh so each test starts quiet.
     vi.resetModules();
     ({ STORAGE_KEY, createSession, deleteSession, loadSession, loadSessions, saveSession } = await import("@/lib/store"));
   });
@@ -137,12 +136,13 @@ describe("store", () => {
     expect(turns[1]).toMatchObject({ analysis: null, error: "Network down" });
   });
 
-  it("returns empty and warns once when storage holds invalid JSON", () => {
+  it("returns empty and warns on every failing load when storage holds invalid JSON", () => {
     storage.map.set(STORAGE_KEY, "{not json");
     expect(loadSessions()).toEqual([]);
     expect(loadSessions()).toEqual([]);
     expect(loadSession("s1")).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(String(warn.mock.calls[0][0])).toMatch(/load/);
   });
 
   it("ignores entries that are not session-shaped", () => {
@@ -150,24 +150,35 @@ describe("store", () => {
     expect(loadSessions().map((s) => s.id)).toEqual(["s1"]);
   });
 
-  it("returns empty and warns once when getItem throws (private mode)", () => {
+  it("returns empty and warns on every failing load when getItem throws (private mode)", () => {
     storage.getItem.mockImplementation(() => {
       throw new Error("SecurityError");
     });
     expect(loadSessions()).toEqual([]);
     expect(loadSessions()).toEqual([]);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("is a no-op and warns once when setItem throws (quota)", () => {
+  it("is a no-op and warns per failing save when setItem throws (quota)", () => {
     storage.setItem.mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveSession(base)).not.toThrow();
-    expect(() => deleteSession("s1")).not.toThrow();
     const created = createSession({ topic: "Work", level: "C1", lang: "es" });
     expect(created.topic).toBe("Work");
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0][0])).toMatch(/save/);
+    expect(String(warn.mock.calls[1][0])).toMatch(/save/);
+  });
+
+  it("is a no-op and warns per failing delete when setItem throws", () => {
+    saveSession(base);
+    storage.setItem.mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    expect(() => deleteSession("s1")).not.toThrow();
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/delete/);
   });
 
   it("behaves as empty when localStorage is not defined (server render)", () => {
