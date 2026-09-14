@@ -1,5 +1,5 @@
 import { newId } from "./ids";
-import type { FeedbackLang, Level, Session, Turn } from "./types";
+import type { BotTurn, FeedbackLang, Level, Session, Turn } from "./types";
 
 export const STORAGE_KEY = "lt:sessions:v1";
 
@@ -18,7 +18,10 @@ function storage(): Storage | null {
   return localStorage;
 }
 
-function isTurn(value: unknown): value is Turn {
+/** A turn as it may sit in storage: bot turns written before `error` existed lack the field. */
+type StoredTurn = Turn | (Omit<BotTurn, "error"> & { error?: string | null });
+
+function isStoredTurn(value: unknown): value is StoredTurn {
   if (typeof value !== "object" || value === null) return false;
   const t = value as Record<string, unknown>;
   if (typeof t.id !== "string") return false;
@@ -27,7 +30,14 @@ function isTurn(value: unknown): value is Turn {
   return false;
 }
 
-function isSession(value: unknown): value is Session {
+function normaliseTurn(turn: StoredTurn): Turn {
+  if (turn.role === "bot") return { ...turn, error: turn.error ?? null };
+  return turn;
+}
+
+type StoredSession = Omit<Session, "turns"> & { turns: StoredTurn[] };
+
+function isStoredSession(value: unknown): value is StoredSession {
   if (typeof value !== "object" || value === null) return false;
   const s = value as Record<string, unknown>;
   return (
@@ -37,8 +47,12 @@ function isSession(value: unknown): value is Session {
     typeof s.lang === "string" &&
     typeof s.createdAt === "string" &&
     Array.isArray(s.turns) &&
-    s.turns.every(isTurn)
+    s.turns.every(isStoredTurn)
   );
+}
+
+function normaliseSession(session: StoredSession): Session {
+  return { ...session, turns: session.turns.map(normaliseTurn) };
 }
 
 /** Read every stored session, in storage order. Any failure yields an empty list. */
@@ -50,7 +64,7 @@ function readAll(operation: Operation): Session[] {
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isSession);
+    return parsed.filter(isStoredSession).map(normaliseSession);
   } catch (err) {
     warn(operation, "read", err);
     return [];

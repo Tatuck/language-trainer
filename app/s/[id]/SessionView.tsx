@@ -39,7 +39,6 @@ export function SessionView({ id }: { id: string }) {
   const [missing, setMissing] = useState(false);
   const [interim, setInterim] = useState<string | null>(null);
   const [inFlight, setInFlight] = useState(false);
-  const [failedBots, setFailedBots] = useState<ReadonlySet<string>>(() => new Set());
   const [notice, setNotice] = useState<string | null>(null);
   const [open, setOpen] = useState<OpenPopover | null>(null);
 
@@ -64,9 +63,9 @@ export function SessionView({ id }: { id: string }) {
     } catch (err) {
       if (signal.aborted) return;
       const message = errorText(err);
-      setFailedBots((prev) => new Set(prev).add(botId));
+      // Keep whatever text streamed before the failure; the error is shown under it.
       setSession((prev) =>
-        prev ? updateTurn(prev, botId, (t) => (t.role === "bot" ? { ...t, text: message, streaming: false } : t)) : prev,
+        prev ? updateTurn(prev, botId, (t) => (t.role === "bot" ? { ...t, error: message, streaming: false } : t)) : prev,
       );
     }
   }, []);
@@ -100,7 +99,7 @@ export function SessionView({ id }: { id: string }) {
         setSession(loaded);
         return;
       }
-      const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true };
+      const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true, error: null };
       setSession({ ...loaded, turns: [bot] });
       setInFlight(true);
       void runReply(bot.id, { history: [], topic: loaded.topic, level: loaded.level }, controller.signal).then(() => {
@@ -133,7 +132,7 @@ export function SessionView({ id }: { id: string }) {
     if (!controller) return;
     const history = historyFromTurns(session.turns);
     const user: UserTurnData = { role: "user", id: newId(), hint: input.hint, analysis: null, error: null };
-    const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true };
+    const bot: BotTurnData = { role: "bot", id: newId(), text: "", streaming: true, error: null };
     const learner = input.audio ? { audio: input.audio, hint: input.hint ?? undefined } : { text: input.text };
 
     stickRef.current = true;
@@ -181,7 +180,7 @@ export function SessionView({ id }: { id: string }) {
         <main className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-4 py-8 sm:px-6">
           {session.turns.map((turn) =>
             turn.role === "bot" ? (
-              <BotTurn key={turn.id} turn={turn} failed={failedBots.has(turn.id)} />
+              <BotTurn key={turn.id} turn={turn} />
             ) : (
               <UserTurn
                 key={turn.id}

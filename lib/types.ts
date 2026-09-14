@@ -16,9 +16,12 @@ export type UserTurn = {
 export type BotTurn = {
   role: "bot";
   id: string;
+  /** Reply text so far; may be partial when `error` is set. */
   text: string;
   /** True while tokens are still streaming in. */
   streaming: boolean;
+  /** Why the reply stopped, or null when it completed (or is still streaming). */
+  error: string | null;
 };
 
 export type Turn = UserTurn | BotTurn;

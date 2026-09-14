@@ -134,13 +134,14 @@ export async function analyze(req: AnalyzeRequest, signal?: AbortSignal): Promis
 /**
  * Plain-text conversation so far for `ReplyRequest.history`: only completed turns, learner
  * turns as the analysed transcript (or the browser hint when analysis failed).
- * Pending turns (analysis still running, bot still streaming) are left out.
+ * Pending turns (analysis still running, bot still streaming) and bot turns that ended in an
+ * error (their text is partial at best) are left out.
  */
 export function historyFromTurns(turns: Turn[]): HistoryMessage[] {
   const history: HistoryMessage[] = [];
   for (const turn of turns) {
     if (turn.role === "bot") {
-      if (turn.streaming || turn.text.length === 0) continue;
+      if (turn.streaming || turn.error !== null || turn.text.length === 0) continue;
       history.push({ role: "assistant", content: turn.text });
       continue;
     }
