@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capHistory, pickUserMessage } from "@/lib/llm/reply-message";
+import { capHistory, hintMessage, pickUserMessage } from "@/lib/llm/reply-message";
 import type { HistoryMessage } from "@/lib/types";
 
 describe("capHistory", () => {
@@ -28,28 +28,15 @@ describe("capHistory", () => {
 });
 
 describe("pickUserMessage", () => {
-  it("uses audio + hint content parts when audio is present and chat === audio model", () => {
-    const result = pickUserMessage({
-      audio: { wavBase64: "AAAA" },
-      hint: "hello",
-      historyEmpty: false,
-      sameModel: true,
-    });
-    expect(result).toEqual({
-      ok: true,
-      content: [
-        { type: "input_audio", input_audio: { data: "AAAA", format: "wav" } },
-        { type: "text", text: "hello" },
-      ],
-    });
-  });
-
-  it("omits the text part when audio is present without a hint", () => {
-    const result = pickUserMessage({ audio: { wavBase64: "AAAA" }, historyEmpty: false, sameModel: true });
-    expect(result).toEqual({
+  it("sends the audio alone when chat === audio model, dropping the browser hint", () => {
+    const audioOnly = {
       ok: true,
       content: [{ type: "input_audio", input_audio: { data: "AAAA", format: "wav" } }],
-    });
+    };
+    expect(
+      pickUserMessage({ audio: { wavBase64: "AAAA" }, hint: "my name is marcus", historyEmpty: false, sameModel: true }),
+    ).toEqual(audioOnly);
+    expect(pickUserMessage({ audio: { wavBase64: "AAAA" }, historyEmpty: false, sameModel: true })).toEqual(audioOnly);
   });
 
   it("falls back to text when audio is present but models differ", () => {
@@ -67,9 +54,15 @@ describe("pickUserMessage", () => {
     expect(result).toEqual({ ok: true, content: "Hello there" });
   });
 
-  it("falls back to hint when there is no audio or text", () => {
-    const result = pickUserMessage({ hint: "hello", historyEmpty: false, sameModel: true });
-    expect(result).toEqual({ ok: true, content: "hello" });
+  it("falls back to the hint, labelled as a rough transcript, when there is no audio or text", () => {
+    const result = pickUserMessage({ hint: "my name is marcus", historyEmpty: false, sameModel: true });
+    expect(result).toEqual({ ok: true, content: hintMessage("my name is marcus") });
+    expect((result as { content: string }).content).toMatch(/^Rough automatic transcript.*misheard.*: my name is marcus$/);
+  });
+
+  it("labels the hint too when audio exists but the chat model cannot hear it", () => {
+    const result = pickUserMessage({ audio: { wavBase64: "AAAA" }, hint: "hello", historyEmpty: false, sameModel: false });
+    expect(result).toEqual({ ok: true, content: hintMessage("hello") });
   });
 
   it("asks the bot to open the conversation when history is empty and nothing else is given", () => {

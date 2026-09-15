@@ -70,10 +70,10 @@ describe("streamTutorReply", () => {
     createMock.mockResolvedValue(chunks(["ok"]));
     const req: ReplyRequest = { ...opener, audio: { wavBase64: "UklGRg==" }, hint: "hello" };
     await streamTutorReply(client, models, req, () => {});
-    expect(createMock.mock.calls[0][0].messages.at(-1)).toEqual({ role: "user", content: "hello" });
+    expect(createMock.mock.calls[0][0].messages.at(-1).content).toMatch(/^Rough automatic transcript.*: hello$/);
     await streamTutorReply(client, { chat: models.audio, audio: models.audio }, req, () => {});
     const content = createMock.mock.calls[1][0].messages.at(-1).content;
-    expect(content[0].type).toBe("input_audio");
+    expect(content).toEqual([{ type: "input_audio", input_audio: { data: "UklGRg==", format: "wav" } }]);
   });
 
   it("rejects with 'Nothing to reply to' when there is history but no new input, without calling the model", async () => {
