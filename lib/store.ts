@@ -1,51 +1,94 @@
-import type { SessionSummary } from "./db";
-import { throwIfNotOk } from "./http";
 import { newId } from "./ids";
-import { parseStoredSession } from "./session-normalise";
+import { parseStoredSession, settleSession } from "./session-normalise";
 import type { FeedbackLang, Level, Session } from "./types";
 
-export type { SessionSummary };
-
 /**
- * Browser-side client for `/api/sessions`. Sessions live in the server's SQLite file; this module
- * only speaks HTTP (plus a one-time import of the localStorage store it replaced).
+ * Sessions live in this browser's localStorage as one JSON array under `STORAGE_KEY`. The functions
+ * stay async so the pages that call them do not care where the data comes from.
  */
 
-/** Key of the pre-SQLite localStorage store; only read by `migrateLocalStorage`. */
 export const STORAGE_KEY = "lt:sessions:v1";
 
-const BASE = "/api/sessions";
+export type SessionSummary = {
+  id: string;
+  topic: string;
+  level: Level;
+  lang: FeedbackLang;
+  createdAt: string;
+  /** Number of learner turns (what the home page shows as "turns"). */
+  turnCount: number;
+};
 
-function sessionUrl(id: string): string {
-  return `${BASE}/${encodeURIComponent(id)}`;
+function storage(): Storage {
+  if (typeof localStorage === "undefined" || localStorage === null) {
+    throw new Error("This browser has no local storage, so sessions cannot be kept.");
+  }
+  return localStorage;
 }
 
-async function request(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, init);
-  await throwIfNotOk(res);
-  return res;
+/** Every readable session in storage order; entries that are not session-shaped are dropped with one warning. */
+function readAll(): Session[] {
+  const raw = storage().getItem(STORAGE_KEY);
+  if (raw === null) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn("[store] stored sessions are not JSON; starting from an empty list.", err);
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    console.warn("[store] stored value is not a list; starting from an empty list.");
+    return [];
+  }
+  const sessions: Session[] = [];
+  let skipped = 0;
+  for (const entry of parsed) {
+    const session = parseStoredSession(entry);
+    if (session) sessions.push(session);
+    else skipped += 1;
+  }
+  if (skipped > 0) console.warn(`[store] ${skipped} stored entries were not session-shaped and were dropped.`);
+  return sessions;
+}
+
+function writeAll(sessions: Session[]): void {
+  storage().setItem(STORAGE_KEY, JSON.stringify(sessions));
+}
+
+function byNewest(a: Session, b: Session): number {
+  return b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+}
+
+/** Full sessions, newest first. */
+export async function loadAllSessions(): Promise<Session[]> {
+  return readAll().sort(byNewest);
 }
 
 /** Summaries of every session, newest first. */
 export async function loadSessions(): Promise<SessionSummary[]> {
-  const res = await request(BASE, { method: "GET" });
-  return (await res.json()) as SessionSummary[];
+  return (await loadAllSessions()).map((s) => ({
+    id: s.id,
+    topic: s.topic,
+    level: s.level,
+    lang: s.lang,
+    createdAt: s.createdAt,
+    turnCount: s.turns.filter((t) => t.role === "user").length,
+  }));
 }
 
 export async function loadSession(id: string): Promise<Session | null> {
-  const res = await fetch(sessionUrl(id), { method: "GET" });
-  if (res.status === 404) return null;
-  await throwIfNotOk(res);
-  return (await res.json()) as Session;
+  return readAll().find((s) => s.id === id) ?? null;
 }
 
-/** Insert or replace the session with the same id. The server settles in-flight turns. */
+/** Insert or replace the session with the same id. In-flight turns are settled so a reload never shows a stuck spinner. */
 export async function saveSession(session: Session): Promise<void> {
-  await request(sessionUrl(session.id), {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(session),
-  });
+  const settled = settleSession(session);
+  const sessions = readAll();
+  const index = sessions.findIndex((s) => s.id === settled.id);
+  if (index === -1) sessions.push(settled);
+  else sessions[index] = settled;
+  writeAll(sessions);
 }
 
 /** Pure: nothing is persisted until the first `saveSession`. */
@@ -61,63 +104,5 @@ export function createSession(input: { topic: string; level: Level; lang: Feedba
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  await request(sessionUrl(id), { method: "DELETE" });
-}
-
-function storage(): Storage | null {
-  if (typeof localStorage === "undefined" || localStorage === null) return null;
-  return localStorage;
-}
-
-/** Sessions the old store left in localStorage, or null when there is nothing readable. */
-function readLegacySessions(s: Storage): Session[] | null {
-  let raw: string | null;
-  try {
-    raw = s.getItem(STORAGE_KEY);
-  } catch (err) {
-    console.warn("[store] migration skipped: localStorage read failed.", err);
-    return null;
-  }
-  if (raw === null) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    console.warn("[store] migration skipped: legacy sessions are not JSON; the key is left in place.", err);
-    return null;
-  }
-  if (!Array.isArray(parsed)) {
-    console.warn("[store] migration skipped: legacy value is not a list; the key is left in place.");
-    return null;
-  }
-  const sessions: Session[] = [];
-  let skipped = 0;
-  for (const entry of parsed) {
-    const session = parseStoredSession(entry);
-    if (session) sessions.push(session);
-    else skipped += 1;
-  }
-  if (skipped > 0) console.warn(`[store] migration: ${skipped} legacy entries were not session-shaped and were dropped.`);
-  return sessions;
-}
-
-/**
- * One-time import of the localStorage store into the server: PUT each session, then remove the
- * key. Returns how many were imported. A failing PUT rethrows and leaves the key, so the next
- * page load retries (PUT is an upsert, so partial imports are harmless).
- */
-export async function migrateLocalStorage(): Promise<number> {
-  const s = storage();
-  if (!s) return 0;
-  const sessions = readLegacySessions(s);
-  if (sessions === null) return 0;
-  for (const session of sessions) {
-    await saveSession(session);
-  }
-  try {
-    s.removeItem(STORAGE_KEY);
-  } catch (err) {
-    console.warn("[store] migration: sessions imported but the legacy key could not be removed.", err);
-  }
-  return sessions.length;
+  writeAll(readAll().filter((s) => s.id !== id));
 }

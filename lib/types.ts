@@ -35,10 +35,10 @@ export type Session = {
   turns: Turn[];
 };
 
-/** Plain-text history sent to the reply route; the API is stateless. */
+/** Plain-text conversation so far, sent with every reply request; the model call is stateless. */
 export type HistoryMessage = { role: "user" | "assistant"; content: string };
 
-/** Body of POST /api/turn/analyze. Exactly one of audio / text must be set. */
+/** One learner turn for the audio model. Exactly one of audio / text must be set. */
 export type AnalyzeRequest = {
   audio?: { wavBase64: string };
   text?: string;
@@ -47,15 +47,10 @@ export type AnalyzeRequest = {
   lang: FeedbackLang;
 };
 
-export type AnalyzeResponse = Analysis;
-
 /**
- * Body of POST /api/turn/reply. Response is `text/event-stream`:
- *   data: {"delta":"partial text"}\n\n   (repeated)
- *   data: {"error":"message"}\n\n        (at most once, then stream ends)
- *   data: [DONE]\n\n
- * Audio is forwarded to the chat model only when it is the same model as the audio model;
- * otherwise the server uses `text`, falling back to `hint`. With neither (and no audio usable) → 400.
+ * One learner turn for the chat model.
+ * Audio is forwarded only when the chat model is also the audio model; otherwise `text` is used,
+ * falling back to `hint`. With neither (and no audio usable) the call is rejected.
  * Empty `history` + no learner input = ask the bot to open the conversation.
  */
 export type ReplyRequest = {
@@ -66,5 +61,3 @@ export type ReplyRequest = {
   topic: string;
   level: Level;
 };
-
-export type ApiError = { error: string };

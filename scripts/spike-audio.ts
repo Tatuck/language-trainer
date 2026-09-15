@@ -12,7 +12,7 @@ const models = process.argv.slice(2).length
   ? process.argv.slice(2)
   : ["meta/muse-spark-1.3", "google/gemini-3.8-flash"];
 const fixtures = ["fixtures/sample-es.wav", "fixtures/sample-en.wav"];
-const client = createClient();
+const client = createClient(process.env.OPENROUTER_API_KEY ?? "");
 
 async function main() {
 for (const model of models) {

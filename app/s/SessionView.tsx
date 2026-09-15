@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { BotTurn } from "@/components/BotTurn";
 import { Legend } from "@/components/Legend";
@@ -25,14 +26,16 @@ type TurnInput = { audio?: { wavBase64: string }; text?: string; hint: string | 
 type OpenPopover = { turnId: string; index: number };
 
 const SCROLL_STICK_PX = 80;
-/** Streaming deltas arrive many times a second; the server is written at most this often. */
+/** Streaming deltas arrive many times a second; storage is written at most this often. */
 const PERSIST_DEBOUNCE_MS = 300;
 
 function updateTurn(session: Session, id: string, patch: (turn: Turn) => Turn): Session {
   return { ...session, turns: session.turns.map((t) => (t.id === id ? patch(t) : t)) };
 }
 
-export function SessionView({ id }: { id: string }) {
+/** The conversation for `?id=…`. Static hosting has no dynamic routes, so the id travels as a query parameter. */
+export function SessionView() {
+  const id = useSearchParams().get("id") ?? "";
   const [session, setSession] = useState<Session | null>(null);
   const [missing, setMissing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -48,7 +51,7 @@ export function SessionView({ id }: { id: string }) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Saves run one after another so an older snapshot can never overwrite a newer one. */
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
-  /** The last snapshot handed to the server; the same object is never sent twice. */
+  /** The last snapshot handed to the store; the same object is never written twice. */
   const lastQueuedRef = useRef<Session | null>(null);
 
   const runReply = useCallback(async (botId: string, req: ReplyRequest, signal: AbortSignal) => {
@@ -90,12 +93,16 @@ export function SessionView({ id }: { id: string }) {
     }
   }, []);
 
-  // Load the session from the server after hydration; a fresh session gets the bot opener.
+  // Load the session from storage after hydration; a fresh session gets the bot opener.
   useEffect(() => {
     const controller = new AbortController();
     abortRef.current = controller;
     let cancelled = false;
     async function load() {
+      if (!id) {
+        setMissing(true);
+        return;
+      }
       let loaded: Session | null;
       try {
         loaded = await loadSession(id);
@@ -109,7 +116,7 @@ export function SessionView({ id }: { id: string }) {
         return;
       }
       if (loaded.turns.length > 0) {
-        // What came back is what the server holds; nothing to write until the learner acts.
+        // What came back is what storage holds; nothing to write until the learner acts.
         lastQueuedRef.current = loaded;
         startTransition(() => setSession(loaded));
         return;
@@ -129,7 +136,7 @@ export function SessionView({ id }: { id: string }) {
   // Derived, so it can never lag behind the turns it describes.
   const inFlight = session ? hasPendingTurn(session.turns) : false;
 
-  // Persist with a trailing debounce; the server strips in-flight state so a reload never shows a stuck spinner.
+  // Persist with a trailing debounce; the store strips in-flight state so a reload never shows a stuck spinner.
   // A failed save is noted under the conversation and never blocks it; the next change retries.
   const persist = useCallback((snapshot: Session) => {
     if (lastQueuedRef.current === snapshot) return;

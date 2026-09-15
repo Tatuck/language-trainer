@@ -3,7 +3,7 @@ import type { AudioContentPart, TextContentPart, UserContent } from "./content";
 
 const MAX_HISTORY = 12;
 
-/** The reply API is stateless; keep only the most recent turns the client sends us. */
+/** The model call is stateless; only the most recent turns are sent with each reply. */
 export function capHistory(history: HistoryMessage[]): HistoryMessage[] {
   return history.length > MAX_HISTORY ? history.slice(-MAX_HISTORY) : history;
 }
@@ -19,7 +19,7 @@ export type PickUserMessageInput = {
 export type PickUserMessageResult = { ok: true; content: UserContent } | { ok: false; error: string };
 
 /**
- * Decides what the learner's new user-turn message is for /api/turn/reply:
+ * Decides what the learner's new user-turn message is for the reply call:
  * audio (only when the chat model can accept it), else text, else the hint,
  * else ask the bot to open the conversation when there is no history yet,
  * else there is nothing to reply to.

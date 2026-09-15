@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { INTERRUPTED_ANALYSIS } from "@/lib/session-normalise";
 import {
   STORAGE_KEY,
   createSession,
   deleteSession,
+  loadAllSessions,
   loadSession,
   loadSessions,
-  migrateLocalStorage,
   saveSession,
 } from "@/lib/store";
 import type { Session } from "@/lib/types";
@@ -24,22 +25,6 @@ function fakeStorage(initial: Record<string, string> = {}) {
   };
 }
 
-const STATUS_TEXT: Record<number, string> = {
-  200: "OK",
-  204: "No Content",
-  400: "Bad Request",
-  404: "Not Found",
-  500: "Internal Server Error",
-};
-
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(body === null ? null : JSON.stringify(body), {
-    status,
-    statusText: STATUS_TEXT[status],
-    headers: body === null ? {} : { "content-type": "application/json" },
-  });
-}
-
 const base: Session = {
   id: "s1",
   topic: "Travel",
@@ -49,24 +34,17 @@ const base: Session = {
   turns: [],
 };
 
-const summary = {
-  id: "s1",
-  topic: "Travel",
-  level: "B1",
-  lang: "es",
-  createdAt: base.createdAt,
-  updatedAt: base.createdAt,
-  turnCount: 0,
-};
+function stored(storage: ReturnType<typeof fakeStorage>): unknown[] {
+  return JSON.parse(storage.map.get(STORAGE_KEY) ?? "[]") as unknown[];
+}
 
-describe("store (API client)", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+describe("store (localStorage)", () => {
+  let storage: ReturnType<typeof fakeStorage>;
   let warn: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("localStorage", undefined);
+    storage = fakeStorage();
+    vi.stubGlobal("localStorage", storage);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -75,153 +53,99 @@ describe("store (API client)", () => {
     vi.restoreAllMocks();
   });
 
-  function calls() {
-    return fetchMock.mock.calls.map(([url, init]) => {
-      const options = init as RequestInit | undefined;
-      return { url: String(url), method: options?.method ?? "GET", init: options };
-    });
-  }
-
-  it("keeps the legacy localStorage key name for the migration", () => {
+  it("keeps the key of the original localStorage store, so old sessions load as they are", () => {
     expect(STORAGE_KEY).toBe("lt:sessions:v1");
   });
 
-  it("loadSessions GETs the summaries", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse([summary]));
-    await expect(loadSessions()).resolves.toEqual([summary]);
-    expect(calls().map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/sessions"]);
+  it("starts empty and answers null for unknown ids", async () => {
+    await expect(loadSessions()).resolves.toEqual([]);
+    await expect(loadAllSessions()).resolves.toEqual([]);
+    await expect(loadSession("nope")).resolves.toBeNull();
   });
 
-  it("loadSession GETs the session by id and maps 404 to null", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(base));
-    await expect(loadSession("s1")).resolves.toEqual(base);
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "Session not found" }, 404));
-    await expect(loadSession("a/b c")).resolves.toBeNull();
-    expect(calls().map((c) => c.url)).toEqual(["/api/sessions/s1", "/api/sessions/a%2Fb%20c"]);
+  it("saveSession upserts by id and loadSession returns the stored session", async () => {
+    await saveSession(base);
+    await saveSession({ ...base, topic: "Food" });
+    expect(stored(storage)).toHaveLength(1);
+    await expect(loadSession("s1")).resolves.toEqual({ ...base, topic: "Food" });
   });
 
-  it("saveSession PUTs the JSON body to the session URL", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(null, 204));
-    await expect(saveSession(base)).resolves.toBeUndefined();
-    const [call] = calls();
-    expect(call.url).toBe("/api/sessions/s1");
-    expect(call.method).toBe("PUT");
-    expect(new Headers(call.init?.headers).get("content-type")).toBe("application/json");
-    expect(JSON.parse(String(call.init?.body))).toEqual(base);
+  it("loadSessions summarises newest first with the learner-turn count", async () => {
+    const older = { ...base, id: "a", createdAt: "2026-01-01T00:00:00.000Z" };
+    const newer: Session = {
+      ...base,
+      id: "b",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      turns: [
+        { role: "bot", id: "b1", text: "Hi", streaming: false, error: null },
+        { role: "user", id: "u1", hint: "x", analysis: null, error: "failed" },
+        { role: "bot", id: "b2", text: "Ok", streaming: false, error: null },
+        { role: "user", id: "u2", hint: "y", analysis: null, error: "failed" },
+      ],
+    };
+    await saveSession(older);
+    await saveSession(newer);
+    await expect(loadSessions()).resolves.toEqual([
+      { id: "b", topic: "Travel", level: "B1", lang: "es", createdAt: newer.createdAt, turnCount: 2 },
+      { id: "a", topic: "Travel", level: "B1", lang: "es", createdAt: older.createdAt, turnCount: 0 },
+    ]);
+    await expect(loadAllSessions()).resolves.toEqual([newer, older]);
   });
 
-  it("deleteSession DELETEs and resolves on 204", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(null, 204));
-    await expect(deleteSession("s1")).resolves.toBeUndefined();
-    expect(calls().map((c) => `${c.method} ${c.url}`)).toEqual(["DELETE /api/sessions/s1"]);
+  it("saveSession settles in-flight turns so a reload never shows a stuck spinner", async () => {
+    await saveSession({
+      ...base,
+      turns: [
+        { role: "bot", id: "b1", text: "", streaming: true, error: null },
+        { role: "user", id: "u1", hint: "hello", analysis: null, error: null },
+        { role: "bot", id: "b2", text: "partial", streaming: true, error: null },
+      ],
+    });
+    const saved = await loadSession("s1");
+    expect(saved?.turns).toEqual([
+      { role: "user", id: "u1", hint: "hello", analysis: null, error: INTERRUPTED_ANALYSIS },
+      { role: "bot", id: "b2", text: "partial", streaming: false, error: null },
+    ]);
   });
 
-  it("throws the server's error message on a non-2xx response", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "topic: Too big" }, 400));
-    await expect(saveSession(base)).rejects.toThrow("topic: Too big");
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "Session not found" }, 404));
-    await expect(deleteSession("s1")).rejects.toThrow("Session not found");
+  it("deleteSession removes only that session", async () => {
+    await saveSession({ ...base, id: "a" });
+    await saveSession({ ...base, id: "b" });
+    await deleteSession("a");
+    await expect(loadSession("a")).resolves.toBeNull();
+    await expect(loadSession("b")).resolves.not.toBeNull();
+    await expect(deleteSession("missing")).resolves.toBeUndefined();
   });
 
-  it("falls back to the status text when the error body is not JSON or has no error", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("<html>boom</html>", { status: 500, statusText: "Internal Server Error" }));
-    await expect(loadSessions()).rejects.toThrow("Internal Server Error");
-    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 502, statusText: "Bad Gateway" }));
-    await expect(loadSession("s1")).rejects.toThrow("Bad Gateway");
+  it("normalises legacy entries and drops ones that are not session-shaped, with one warning", async () => {
+    const legacy = { ...base, turns: [{ role: "bot", id: "b1", text: "Hi.", streaming: false }] };
+    storage.map.set(STORAGE_KEY, JSON.stringify([legacy, null, 42, { id: 7 }]));
+    const all = await loadAllSessions();
+    expect(all).toHaveLength(1);
+    expect(all[0].turns[0]).toEqual({ role: "bot", id: "b1", text: "Hi.", streaming: false, error: null });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/3/);
   });
 
-  it("createSession is pure: a fresh id, createdAt and no turns, and no request", () => {
+  it("treats an unreadable stored value as an empty list, with a warning", async () => {
+    storage.map.set(STORAGE_KEY, "{not json");
+    await expect(loadSessions()).resolves.toEqual([]);
+    storage.map.set(STORAGE_KEY, JSON.stringify({ not: "an array" }));
+    await expect(loadSessions()).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects with a readable message when localStorage is unavailable", async () => {
+    vi.stubGlobal("localStorage", undefined);
+    await expect(loadSessions()).rejects.toThrow(/local storage/);
+    await expect(saveSession(base)).rejects.toThrow(/local storage/);
+  });
+
+  it("createSession is pure: a fresh id, createdAt and no turns, nothing stored", () => {
     const s = createSession({ topic: "Food", level: "A2", lang: "en" });
     expect(s.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(s).toMatchObject({ topic: "Food", level: "A2", lang: "en", turns: [] });
     expect(Number.isNaN(Date.parse(s.createdAt))).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  describe("migrateLocalStorage", () => {
-    it("returns 0 without touching the network when localStorage is unavailable or empty", async () => {
-      await expect(migrateLocalStorage()).resolves.toBe(0);
-      const storage = fakeStorage();
-      vi.stubGlobal("localStorage", storage);
-      await expect(migrateLocalStorage()).resolves.toBe(0);
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(storage.removeItem).not.toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
-    });
-
-    it("PUTs every stored session in order, removes the key and returns the count", async () => {
-      const older = { ...base, id: "a", createdAt: "2026-01-01T00:00:00.000Z" };
-      const newer = { ...base, id: "b", createdAt: "2026-02-01T00:00:00.000Z" };
-      const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify([newer, older]) });
-      vi.stubGlobal("localStorage", storage);
-      fetchMock.mockResolvedValue(jsonResponse(null, 204));
-      await expect(migrateLocalStorage()).resolves.toBe(2);
-      expect(calls().map((c) => `${c.method} ${c.url}`)).toEqual(["PUT /api/sessions/b", "PUT /api/sessions/a"]);
-      expect(storage.removeItem).toHaveBeenCalledWith(STORAGE_KEY);
-      expect(storage.map.has(STORAGE_KEY)).toBe(false);
-      expect(warn).not.toHaveBeenCalled();
-    });
-
-    it("normalises legacy entries and skips ones that are not session-shaped, with one warning", async () => {
-      const legacy = { ...base, turns: [{ role: "bot", id: "b1", text: "Hi.", streaming: false }] };
-      const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify([legacy, null, 42, { id: 7 }]) });
-      vi.stubGlobal("localStorage", storage);
-      fetchMock.mockResolvedValue(jsonResponse(null, 204));
-      await expect(migrateLocalStorage()).resolves.toBe(1);
-      const [call] = calls();
-      expect(JSON.parse(String(call.init?.body)).turns[0]).toEqual({
-        role: "bot",
-        id: "b1",
-        text: "Hi.",
-        streaming: false,
-        error: null,
-      });
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0][0])).toMatch(/3/);
-      expect(storage.map.has(STORAGE_KEY)).toBe(false);
-    });
-
-    it("keeps the key and rethrows when a PUT fails, so the next load retries", async () => {
-      const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify([{ ...base, id: "a" }, { ...base, id: "b" }]) });
-      vi.stubGlobal("localStorage", storage);
-      fetchMock.mockResolvedValueOnce(jsonResponse(null, 204));
-      fetchMock.mockResolvedValueOnce(jsonResponse({ error: "disk full" }, 500));
-      await expect(migrateLocalStorage()).rejects.toThrow("disk full");
-      expect(storage.removeItem).not.toHaveBeenCalled();
-      expect(storage.map.has(STORAGE_KEY)).toBe(true);
-    });
-
-    it("warns and returns 0, keeping the key, when the stored value is not a JSON array", async () => {
-      const storage = fakeStorage({ [STORAGE_KEY]: "{not json" });
-      vi.stubGlobal("localStorage", storage);
-      await expect(migrateLocalStorage()).resolves.toBe(0);
-      storage.map.set(STORAGE_KEY, JSON.stringify({ not: "an array" }));
-      await expect(migrateLocalStorage()).resolves.toBe(0);
-      expect(warn).toHaveBeenCalledTimes(2);
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(storage.map.has(STORAGE_KEY)).toBe(true);
-    });
-
-    it("warns and returns 0 when reading storage throws (private mode)", async () => {
-      const storage = fakeStorage();
-      storage.getItem.mockImplementation(() => {
-        throw new Error("SecurityError");
-      });
-      vi.stubGlobal("localStorage", storage);
-      await expect(migrateLocalStorage()).resolves.toBe(0);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it("still reports the imported count when removing the key throws", async () => {
-      const storage = fakeStorage({ [STORAGE_KEY]: JSON.stringify([base]) });
-      storage.removeItem.mockImplementation(() => {
-        throw new Error("SecurityError");
-      });
-      vi.stubGlobal("localStorage", storage);
-      fetchMock.mockResolvedValue(jsonResponse(null, 204));
-      await expect(migrateLocalStorage()).resolves.toBe(1);
-      expect(warn).toHaveBeenCalledTimes(1);
-    });
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 });

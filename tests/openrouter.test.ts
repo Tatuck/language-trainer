@@ -1,43 +1,66 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveModels, createClient } from "@/lib/openrouter";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { checkApiKey, createClient } from "@/lib/openrouter";
 
-afterEach(() => vi.unstubAllEnvs());
-
-describe("resolveModels", () => {
-  it("defaults chat and audio to OPENROUTER_MODEL", () => {
-    vi.stubEnv("OPENROUTER_MODEL", "meta/muse-spark-1.3");
-    vi.stubEnv("OPENROUTER_AUDIO_MODEL", "");
-    expect(resolveModels()).toEqual({ chat: "meta/muse-spark-1.3", audio: "meta/muse-spark-1.3" });
+describe("createClient", () => {
+  it("throws a Settings hint when the key is blank", () => {
+    expect(() => createClient("")).toThrow(/Settings/);
+    expect(() => createClient("   ")).toThrow(/Settings/);
   });
 
-  it("uses OPENROUTER_AUDIO_MODEL for audio when set", () => {
-    vi.stubEnv("OPENROUTER_MODEL", "meta/muse-spark-1.3");
-    vi.stubEnv("OPENROUTER_AUDIO_MODEL", "google/gemini-3.8-flash");
-    expect(resolveModels().audio).toBe("google/gemini-3.8-flash");
+  it("points at the OpenRouter base URL and allows browser use", () => {
+    const client = createClient("sk-or-test");
+    expect(client.baseURL).toBe("https://openrouter.ai/api/v1");
+    expect(client.apiKey).toBe("sk-or-test");
   });
 
-  it("falls back to meta/muse-spark-1.3 when nothing is set", () => {
-    vi.stubEnv("OPENROUTER_MODEL", "");
-    vi.stubEnv("OPENROUTER_AUDIO_MODEL", "");
-    expect(resolveModels().chat).toBe("meta/muse-spark-1.3");
+  it("trims the key, times out after 60 s and retries at most once", () => {
+    const client = createClient("  sk-or-test\n");
+    expect(client.apiKey).toBe("sk-or-test");
+    expect(client.timeout).toBe(60000);
+    expect(client.maxRetries).toBe(1);
   });
 });
 
-describe("createClient", () => {
-  it("throws a clear error when OPENROUTER_API_KEY is missing", () => {
-    vi.stubEnv("OPENROUTER_API_KEY", "");
-    expect(() => createClient()).toThrow(/OPENROUTER_API_KEY/);
+describe("checkApiKey", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("GETs /auth/key with the bearer key and maps the answer", async () => {
+    fetchMock.mockResolvedValue(Response.json({ data: { label: "sk-or-v1-abc…", usage: 0.42, limit: 5 } }));
+    await expect(checkApiKey(" sk-or-test ")).resolves.toEqual({ label: "sk-or-v1-abc…", usage: 0.42, limit: 5 });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://openrouter.ai/api/v1/auth/key");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-or-test");
   });
 
-  it("points at the OpenRouter base URL", () => {
-    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
-    expect(createClient().baseURL).toBe("https://openrouter.ai/api/v1");
+  it("tolerates missing or odd fields", async () => {
+    fetchMock.mockResolvedValue(Response.json({ data: { usage: "lots" } }));
+    await expect(checkApiKey("sk-or-test")).resolves.toEqual({ label: null, usage: null, limit: null });
+    fetchMock.mockResolvedValue(Response.json({}));
+    await expect(checkApiKey("sk-or-test")).resolves.toEqual({ label: null, usage: null, limit: null });
   });
 
-  it("times out after 60 s and retries at most once", () => {
-    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
-    const client = createClient();
-    expect(client.timeout).toBe(60000);
-    expect(client.maxRetries).toBe(1);
+  it("rejects a blank key without calling the network", async () => {
+    await expect(checkApiKey("")).rejects.toThrow(/Settings/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects with a fixed message on 401/403 and with the status otherwise", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 401 }));
+    await expect(checkApiKey("sk-or-test")).rejects.toThrow(/rejected/);
+    fetchMock.mockResolvedValue(new Response("{}", { status: 503, statusText: "Service Unavailable" }));
+    await expect(checkApiKey("sk-or-test")).rejects.toThrow(/503 Service Unavailable/);
+  });
+
+  it("forwards the abort signal", async () => {
+    fetchMock.mockResolvedValue(Response.json({ data: {} }));
+    const ac = new AbortController();
+    await checkApiKey("sk-or-test", ac.signal);
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(ac.signal);
   });
 });

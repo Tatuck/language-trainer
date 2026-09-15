@@ -3,16 +3,12 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { startTransition, useCallback, useEffect, useState } from "react";
+import { MOCK_API } from "@/lib/api";
 import { errorText } from "@/lib/http";
 import { FEEDBACK_LANGS, LEVELS } from "@/lib/prompts";
-import {
-  createSession,
-  deleteSession,
-  loadSessions,
-  migrateLocalStorage,
-  saveSession,
-  type SessionSummary,
-} from "@/lib/store";
+import { hasApiKey } from "@/lib/settings";
+import { useStoredSettings } from "@/lib/use-settings";
+import { createSession, deleteSession, loadSessions, saveSession, type SessionSummary } from "@/lib/store";
 import { TOPICS } from "@/lib/topics";
 import type { FeedbackLang, Level } from "@/lib/types";
 
@@ -37,36 +33,32 @@ export default function Home() {
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const settings = useStoredSettings();
+  /** Null until settings are read after hydration (storage is browser-only). */
+  const keyMissing = settings === null ? null : !MOCK_API && !hasApiKey(settings);
 
-  const refresh = useCallback(async () => {
-    try {
-      const list = await loadSessions();
-      startTransition(() => {
-        setSessions(list);
-        setListError(null);
-      });
-    } catch (err) {
-      setListError(errorText(err));
-    }
-  }, []);
+  /** Bumped to re-read the session list after a change. */
+  const [listVersion, setListVersion] = useState(0);
+  const refresh = useCallback(() => setListVersion((v) => v + 1), []);
 
   useEffect(() => {
     let cancelled = false;
-    async function init() {
-      // Sessions written by the old localStorage store are imported once, before the list is read.
-      try {
-        const imported = await migrateLocalStorage();
-        if (!cancelled && imported > 0) setNotice(`Imported ${imported} ${imported === 1 ? "session" : "sessions"}`);
-      } catch (err) {
-        if (!cancelled) setNotice(`Could not import older sessions: ${errorText(err)}`);
-      }
-      if (!cancelled) await refresh();
-    }
-    void init();
+    loadSessions().then(
+      (list) => {
+        if (cancelled) return;
+        startTransition(() => {
+          setSessions(list);
+          setListError(null);
+        });
+      },
+      (err: unknown) => {
+        if (!cancelled) setListError(errorText(err));
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [listVersion]);
 
   const customTopic = custom.trim();
   const presetTopic = TOPICS.find((t) => t.id === topicId)?.title ?? null;
@@ -78,7 +70,7 @@ export default function Home() {
   }
 
   async function start() {
-    if (!topic || starting) return;
+    if (!topic || starting || keyMissing !== false) return;
     const session = createSession({ topic, level, lang });
     setStarting(true);
     try {
@@ -88,7 +80,7 @@ export default function Home() {
       setNotice(`Could not start the session: ${errorText(err)}`);
       return;
     }
-    router.push(`/s/${session.id}`);
+    router.push(`/s?id=${encodeURIComponent(session.id)}`);
   }
 
   async function remove(id: string) {
@@ -98,23 +90,40 @@ export default function Home() {
       setNotice(`Could not delete the session: ${errorText(err)}`);
       return;
     }
-    await refresh();
+    refresh();
   }
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 pt-12 pb-16 sm:px-6 sm:pt-20">
       <header className="flex items-baseline justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">LanguageTrainer</h1>
-        <Link
-          href="/notebook"
-          className="shrink-0 text-sm text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          Notebook
-        </Link>
+        <nav className="flex shrink-0 gap-4 text-sm">
+          <Link
+            href="/notebook"
+            className="text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Notebook
+          </Link>
+          <Link
+            href="/settings"
+            className="text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Settings
+          </Link>
+        </nav>
       </header>
       <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
         Pick a topic, talk, and get your English corrected sentence by sentence.
       </p>
+      {keyMissing && (
+        <p role="status" className="mt-4 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+          You need an OpenRouter API key to start: it stays in this browser and is only sent to openrouter.ai.{" "}
+          <Link href="/settings" className="underline underline-offset-4">
+            Add it in Settings
+          </Link>
+          .
+        </p>
+      )}
       {notice && (
         <p role="status" className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
           {notice}
@@ -198,7 +207,7 @@ export default function Home() {
       <button
         type="button"
         onClick={() => void start()}
-        disabled={!topic || starting}
+        disabled={!topic || starting || keyMissing !== false}
         className="mt-10 w-full rounded-md bg-zinc-900 px-4 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto sm:px-8 dark:bg-zinc-100 dark:text-zinc-900"
       >
         Start
@@ -211,7 +220,7 @@ export default function Home() {
         {listError !== null ? (
           <p role="alert" className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
             Could not load sessions: {listError}{" "}
-            <button type="button" onClick={() => void refresh()} className="underline underline-offset-4">
+            <button type="button" onClick={refresh} className="underline underline-offset-4">
               Retry
             </button>
           </p>
@@ -225,7 +234,7 @@ export default function Home() {
               const turns = s.turnCount;
               return (
                 <li key={s.id} className="flex items-center justify-between gap-4 py-3">
-                  <Link href={`/s/${s.id}`} className="group min-w-0 flex-1">
+                  <Link href={`/s?id=${encodeURIComponent(s.id)}`} className="group min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium group-hover:underline group-hover:underline-offset-4">
                       {s.topic}
                     </span>

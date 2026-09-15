@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { MAX_TOPIC_CHARS } from "./llm/requests";
 import { FEEDBACK_LANGS, LEVELS } from "./prompts";
 import { AnalysisSchema } from "./schema";
 import type { Session, Turn } from "./types";
@@ -8,6 +7,7 @@ import type { Session, Turn } from "./types";
 export const INTERRUPTED_ANALYSIS = "Analysis was interrupted before it finished. Say it again to retry.";
 
 export const MAX_SESSION_TURNS = 500;
+export const MAX_TOPIC_CHARS = 200;
 
 const UserTurnSchema = z.object({
   role: z.literal("user"),
@@ -25,7 +25,7 @@ const BotTurnSchema = z.object({
   error: z.string().nullable(),
 });
 
-/** The `Session` contract as the API accepts it: every field present, bounded topic and turn count. */
+/** The `Session` contract: every field present, bounded topic and turn count. */
 export const SessionSchema = z.object({
   id: z.string().min(1).max(64),
   topic: z.string().min(1).max(MAX_TOPIC_CHARS),
@@ -42,7 +42,7 @@ const StoredSessionSchema = SessionSchema.extend({
   turns: z.array(z.discriminatedUnion("role", [UserTurnSchema, StoredBotTurnSchema])).max(MAX_SESSION_TURNS),
 });
 
-/** A session as it may sit in storage (localStorage or the DB), normalised; null when not session-shaped. */
+/** A session as it may sit in localStorage, normalised; null when not session-shaped. */
 export function parseStoredSession(value: unknown): Session | null {
   const result = StoredSessionSchema.safeParse(value);
   return result.success ? result.data : null;

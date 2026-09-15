@@ -1,9 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
+const description = "Practise spoken English: talk about a topic, get corrections sentence by sentence.";
+
 export const metadata: Metadata = {
+  // Origin only: Next prepends the basePath to file-convention images (opengraph-image.png) itself.
+  metadataBase: new URL("https://tatuck.github.io"),
   title: "LanguageTrainer",
-  description: "Practise spoken English: talk about a topic, get corrections sentence by sentence.",
+  description,
+  openGraph: { title: "LanguageTrainer", description, type: "website", url: "https://tatuck.github.io/language-trainer/" },
+  twitter: { card: "summary_large_image", title: "LanguageTrainer", description },
 };
 
 export const viewport: Viewport = {
