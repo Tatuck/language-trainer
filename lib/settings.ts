@@ -8,7 +8,7 @@ export const SETTINGS_KEY = "lt:settings:v1";
 export const DEFAULT_CHAT_MODEL = "google/gemini-3.8-flash";
 export const DEFAULT_AUDIO_MODEL = "google/gemini-3.8-flash";
 
-/** Shown as `<datalist>` hints on the settings page; any OpenRouter model id is accepted. */
+/** `<datalist>` hints on the settings page until OpenRouter's catalogue loads; any model id is accepted. */
 export const MODEL_SUGGESTIONS = [
   "google/gemini-3.8-flash",
   "google/gemini-3.8-pro",

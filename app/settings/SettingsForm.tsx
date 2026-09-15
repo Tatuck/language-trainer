@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "@/lib/http";
-import { checkApiKey } from "@/lib/openrouter";
+import { checkApiKey, listModels, type ModelInfo } from "@/lib/openrouter";
 import {
   DEFAULT_AUDIO_MODEL,
   DEFAULT_CHAT_MODEL,
@@ -37,12 +37,36 @@ export function SettingsForm() {
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const checkRef = useRef<AbortController | null>(null);
+  /** OpenRouter's catalogue once fetched; null keeps the fixed hints. */
+  const [models, setModels] = useState<ModelInfo[] | null>(null);
+  const modelsRef = useRef<AbortController | null>(null);
   const [theme, setTheme] = useTheme();
 
   const loaded = stored !== null;
   const draft = edits ?? stored ?? DEFAULT_SETTINGS;
+  const storedKey = stored?.apiKey ?? "";
 
-  useEffect(() => () => checkRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      checkRef.current?.abort();
+      modelsRef.current?.abort();
+    },
+    [],
+  );
+
+  /** Fills the model suggestions from OpenRouter; a failure just leaves the fixed hints in place. */
+  const loadModels = useCallback((key: string) => {
+    modelsRef.current?.abort();
+    const controller = new AbortController();
+    modelsRef.current = controller;
+    listModels(key, controller.signal).then(setModels, (err: unknown) => {
+      if (!controller.signal.aborted) console.warn("[settings] model list failed; keeping the fixed hints.", err);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (storedKey) loadModels(storedKey);
+  }, [storedKey, loadModels]);
 
   function update(patch: Partial<Settings>) {
     setStatus(null);
@@ -71,6 +95,7 @@ export function SettingsForm() {
       if (info.label) parts.push(`(${info.label})`);
       if (info.usage !== null) parts.push(`· spent ${money(info.usage)}${info.limit !== null ? ` of ${money(info.limit)}` : ""}`);
       setStatus({ kind: "ok", text: `${parts.join(" ")}.` });
+      loadModels(draft.apiKey);
     } catch (err) {
       if (!controller.signal.aborted) setStatus({ kind: "error", text: errorText(err) });
     } finally {
@@ -79,6 +104,9 @@ export function SettingsForm() {
   }
 
   const keyEmpty = draft.apiKey.trim().length === 0;
+  const chatModels: readonly string[] = models?.map((m) => m.id) ?? MODEL_SUGGESTIONS;
+  const audioOnly = models?.filter((m) => m.audio).map((m) => m.id) ?? [];
+  const audioModels: readonly string[] = audioOnly.length > 0 ? audioOnly : MODEL_SUGGESTIONS;
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 pt-12 pb-16 sm:px-6 sm:pt-20">
@@ -136,7 +164,7 @@ export function SettingsForm() {
           <input
             id="audioModel"
             type="text"
-            list="model-suggestions"
+            list="audio-models"
             autoComplete="off"
             spellCheck={false}
             value={draft.audioModel}
@@ -157,7 +185,7 @@ export function SettingsForm() {
           <input
             id="chatModel"
             type="text"
-            list="model-suggestions"
+            list="chat-models"
             autoComplete="off"
             spellCheck={false}
             value={draft.chatModel}
@@ -175,8 +203,13 @@ export function SettingsForm() {
           </p>
         </section>
 
-        <datalist id="model-suggestions">
-          {MODEL_SUGGESTIONS.map((m) => (
+        <datalist id="audio-models">
+          {audioModels.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <datalist id="chat-models">
+          {chatModels.map((m) => (
             <option key={m} value={m} />
           ))}
         </datalist>

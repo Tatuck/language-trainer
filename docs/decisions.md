@@ -28,6 +28,7 @@ The first version had Next.js route handlers holding the OpenRouter key and a `n
 
 - **Static export** (`output: "export"`) on GitHub Pages. No route handlers, so the browser calls OpenRouter directly with the OpenAI SDK (`dangerouslyAllowBrowser`); OpenRouter serves CORS headers for exactly this use.
 - **Key and model ids in `localStorage`** (`lib/settings.ts`), entered on `/settings`. The key goes only to `openrouter.ai`.
+- **Model suggestions from `GET /models`** (public endpoint), fetched on `/settings` when a key is stored and again after "Check key". The audio field lists only models whose `architecture.input_modalities` includes `audio`; the five fixed ids in `MODEL_SUGGESTIONS` stay as the fallback when the fetch fails. Native `<datalist>` does the filter-as-you-type.
 - **Sessions back in `localStorage`** under the original `lt:sessions:v1` key, so data from the very first version still loads. `settleSession` runs on every save, as the server used to.
 - `/s/[id]` became `/s?id=…`: static hosts cannot serve dynamic segments.
 - **Default chat model → `google/gemini-3.8-flash`**, matching the audio model: 3× faster first token and half the cost of muse-spark (table above), and with one model the reply call can take the audio itself.

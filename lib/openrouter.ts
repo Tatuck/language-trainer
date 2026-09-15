@@ -61,3 +61,38 @@ export async function checkApiKey(apiKey: string, signal?: AbortSignal): Promise
     limit: numberOrNull(o.limit),
   };
 }
+
+export type ModelInfo = {
+  id: string;
+  /** Accepts `input_audio`, so it can be the audio model. */
+  audio: boolean;
+};
+
+function modelInfo(value: unknown): ModelInfo | null {
+  if (typeof value !== "object" || value === null) return null;
+  const o = value as Record<string, unknown>;
+  if (typeof o.id !== "string" || o.id.length === 0) return null;
+  const arch = typeof o.architecture === "object" && o.architecture !== null ? (o.architecture as Record<string, unknown>) : {};
+  const inputs = Array.isArray(arch.input_modalities) ? arch.input_modalities : [];
+  return { id: o.id, audio: inputs.includes("audio") };
+}
+
+/**
+ * Every model OpenRouter routes to, sorted by id. The endpoint is public; the key is sent when
+ * there is one so the call counts against it rather than against the IP.
+ */
+export async function listModels(apiKey: string, signal?: AbortSignal): Promise<ModelInfo[]> {
+  const key = apiKey.trim();
+  const res = await fetch(`${OPENROUTER_BASE_URL}/models`, {
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+    signal,
+  });
+  if (!res.ok) throw new Error(`OpenRouter answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}.`);
+  const json: unknown = await res.json();
+  const data = typeof json === "object" && json !== null ? (json as { data?: unknown }).data : undefined;
+  if (!Array.isArray(data)) return [];
+  return data
+    .map(modelInfo)
+    .filter((m): m is ModelInfo => m !== null)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}

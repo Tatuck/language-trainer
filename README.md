@@ -3,6 +3,8 @@
 [![CI](https://github.com/Tatuck/language-trainer/actions/workflows/ci.yml/badge.svg)](https://github.com/Tatuck/language-trainer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 
+> This repository was written using AI: Claude Code with the Opus 5 model and [ECC](https://github.com/affaan-m/ecc).
+
 Practise **spoken English** in the browser. Pick a topic, talk to a tutor, and every sentence you say comes back colour-coded — natural / could be better / mistake — with a correction, alternative phrasings and notes on the words where your Spanish accent shows most.
 
 **Try it: [tatuck.github.io/language-trainer](https://tatuck.github.io/language-trainer/)** — bring your own [OpenRouter](https://openrouter.ai) key.
@@ -16,7 +18,7 @@ There is no server. The site is static HTML + JS; your browser talks to OpenRout
 - Your API key is stored in this browser's `localStorage` and sent only to `openrouter.ai`, with each request you make. It never touches any other server.
 - Your sessions live in `localStorage` too. Clear site data and they are gone.
 - A conversation turn costs a fraction of a cent with the default model; put a spending limit on the key if you want a hard cap.
-- Pick any OpenRouter model ids in **Settings**. The audio model must accept audio input (the Gemini models do).
+- Pick any OpenRouter model ids in **Settings**. With a key stored, the fields suggest OpenRouter's whole catalogue as you type; the audio model must accept audio input (the Gemini models do), so its list is narrowed to those.
 
 ## How it works
 
