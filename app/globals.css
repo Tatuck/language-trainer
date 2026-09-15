@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* `dark:` follows the attribute set by lib/theme.ts (stored preference or the OS), not the media query alone. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /* Blinking caret shown at the end of a bot reply while tokens stream in. */
 @keyframes caret-blink {
   0%,
@@ -13,5 +16,9 @@
 }
 
 html {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
 }

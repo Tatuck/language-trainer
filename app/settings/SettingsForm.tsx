@@ -12,6 +12,7 @@ import {
   saveSettings,
   type Settings,
 } from "@/lib/settings";
+import { THEMES, useTheme, type Theme } from "@/lib/theme";
 import { useStoredSettings } from "@/lib/use-settings";
 
 const field =
@@ -19,6 +20,10 @@ const field =
 const label = "block text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400";
 const secondary =
   "text-sm text-zinc-500 underline-offset-4 hover:text-zinc-900 hover:underline disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-400 dark:hover:text-zinc-100";
+const segment =
+  "px-3 py-1.5 text-sm transition-colors aria-pressed:bg-zinc-900 aria-pressed:text-white dark:aria-pressed:bg-zinc-100 dark:aria-pressed:text-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 aria-pressed:hover:bg-zinc-900 dark:aria-pressed:hover:bg-zinc-100";
+
+const THEME_LABEL: Record<Theme, string> = { system: "System", light: "Light", dark: "Dark" };
 
 function money(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -32,6 +37,7 @@ export function SettingsForm() {
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const checkRef = useRef<AbortController | null>(null);
+  const [theme, setTheme] = useTheme();
 
   const loaded = stored !== null;
   const draft = edits ?? stored ?? DEFAULT_SETTINGS;
@@ -202,6 +208,26 @@ export function SettingsForm() {
           </button>
         </div>
       </form>
+
+      <section className="mt-12" aria-labelledby="appearance-heading">
+        <h2 id="appearance-heading" className={label}>
+          Appearance
+        </h2>
+        <div role="group" aria-label="Theme" className="mt-3 inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-zinc-700">
+          {THEMES.map((t) => (
+            <button
+              key={t}
+              type="button"
+              aria-pressed={theme === t}
+              onClick={() => setTheme(t)}
+              className={`${segment} border-r border-zinc-300 last:border-r-0 dark:border-zinc-700`}
+            >
+              {THEME_LABEL[t]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Applies right away and is remembered in this browser.</p>
+      </section>
     </main>
   );
 }
