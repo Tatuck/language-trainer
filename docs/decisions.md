@@ -21,3 +21,14 @@ Sent two 14.6 s 16 kHz mono WAVs (espeak-ng, Spanish voice reading English = hea
 - `OPENROUTER_MODEL=meta/muse-spark-1.3` kept as the reply model (user's choice). Switching it to gemini cuts wait per turn from ~6 s to ~2 s and halves cost.
 - Reply route sends audio to the chat model only when chat model == audio model; otherwise it sends text (browser ASR hint in parallel, or the analysis transcript).
 - Audio format: 16 kHz mono PCM16 WAV, base64 `input_audio`. ~460 KB per 15 s.
+
+## 2026-09-15 — Static site, bring your own key
+
+The first version had Next.js route handlers holding the OpenRouter key and a `node:sqlite` store. To publish a working demo without paying for other people's conversations, and without a server to run:
+
+- **Static export** (`output: "export"`) on GitHub Pages. No route handlers, so the browser calls OpenRouter directly with the OpenAI SDK (`dangerouslyAllowBrowser`); OpenRouter serves CORS headers for exactly this use.
+- **Key and model ids in `localStorage`** (`lib/settings.ts`), entered on `/settings`. The key goes only to `openrouter.ai`.
+- **Sessions back in `localStorage`** under the original `lt:sessions:v1` key, so data from the very first version still loads. `settleSession` runs on every save, as the server used to.
+- `/s/[id]` became `/s?id=…`: static hosts cannot serve dynamic segments.
+- **Default chat model → `google/gemini-3.8-flash`**, matching the audio model: 3× faster first token and half the cost of muse-spark (table above), and with one model the reply call can take the audio itself.
+- Vercel was considered and rejected: its serverless filesystem would not persist SQLite either, so it would have needed the same client-side store while still costing a deployment.
