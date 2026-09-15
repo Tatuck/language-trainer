@@ -43,8 +43,11 @@ next-env.d.ts
 # keep example env
 !.env.example
 
-# local Claude Code settings
-.claude/settings.local.json
+# static export
+/out/
 
-# local SQLite database
+# Claude Code
+.claude/
+
+# SQLite from the pre-static version
 /data/

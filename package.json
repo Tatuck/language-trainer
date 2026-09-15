@@ -1,11 +1,21 @@
 {
   "name": "language-trainer",
   "version": "0.1.0",
+  "description": "Practise spoken English in the browser: talk to a tutor, get every sentence corrected.",
+  "license": "MIT",
+  "homepage": "https://tatuck.github.io/language-trainer/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tatuck/language-trainer.git"
+  },
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "serve": "python3 -m http.server -d out 3001",
     "lint": "eslint",
     "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit",
